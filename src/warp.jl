@@ -46,13 +46,24 @@ _shfl_recurse(op, x::Float64) = reinterpret(Float64, _shfl_recurse(op, reinterpr
 _shfl_recurse(op, x::Bool) = op(UInt32(x)) % Bool
 
 
-function _shfl_recurse(op, val::T) where {T}
+#function _shfl_recurse(op, val::T)::T where {T}
+#    if isprimitivetype(T)
+#        return op(val)
+#    else
+#        return T(ntuple(i -> _shfl_recurse(op, getfield(val, i)), Val(fieldcount(T)))...)
+#    end
+#end
+@generated function _shfl_recurse(op, val::T) where {T}
     if isprimitivetype(T)
-        return op(val)
+        return :(op(val))
     else
-        return T(ntuple(Val(fieldcount(T))) do i
-            _shfl_recurse(op, getfield(val, i))
-        end...)
+        # Generate code for each field at compile time
+        field_exprs = [:(_shfl_recurse(op, getfield(val, $i)))
+                       for i in 1:fieldcount(T)]
+
+        return quote
+            T($(field_exprs...))
+        end
     end
 end
 
@@ -75,6 +86,17 @@ macro warpreduce(val, lane, op=:+, ws=32, mask=0xffffffff)
             if $(esc(lane)) > offset
                 $(esc(val)) = $(esc(op))(shuffled, $(esc(val)))
             end
+            offset <<= 1
+        end
+    end
+end
+
+macro warpfold(val, lane, op=:+, ws=32, mask=0xffffffff)
+    quote
+        local offset = 1
+        while offset < $(esc(ws))
+            shuffled = @shfl(Down, $(esc(val)), offset, $(esc(ws)), $(esc(mask)))
+            $(esc(val)) = $(esc(op))(shuffled, $(esc(val)))
             offset <<= 1
         end
     end

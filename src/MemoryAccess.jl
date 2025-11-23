@@ -4,9 +4,8 @@ using KernelAbstractions
 
 export @fence, @access
 export vectorized_load, vectorized_store!
-export vectorized_cached_load
 
-export @shfl, @warpreduce, _vote, @vote
+export @shfl, @warpreduce, @warpfold, @vote
 #export atomic_store, atomic_load, fence
 #export Workgroup, Device, System
 #export Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
@@ -170,24 +169,8 @@ function fence end
 function atomic_store! end
 function atomic_load end
 
-@inline function vectorized_load(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
-    id_base = (idx - 1) * Nitem
-    return ntuple(i -> A[id_base+i], Val(Nitem))
-end
-@inline function vectorized_cached_load(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
-    id_base = (idx - 1) * Nitem
-    return ntuple(i -> A[id_base+i], Val(Nitem))
-end
 
-
-@inline function vectorized_store!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}) where {T,Nitem}
-    id_base = (idx - 1) * Nitem
-    for i in (1:Nitem)
-        A[id_base+i] = values[i]
-    end
-    return
-end
-
+include("vectorized_access.jl")
 include("warp.jl")
 include("macros.jl")
 

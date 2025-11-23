@@ -111,6 +111,17 @@ macro access(args...)
 
     scope = isnothing(scope) ? Device : scope
 
+    # NEW: Handle standalone array access (returns atomic_load value)
+    if isa(expr, Expr) && expr.head == :ref
+        ordering = isnothing(ordering) ? Acquire : ordering
+        array = expr.args[1]
+        idxs = [esc(i) for i in expr.args[2:end]]
+        V = esc(array)
+        return quote
+            $atomic_load($(V), $LinearIndices($(V))[$(idxs...)], $scope, $ordering)
+        end
+    end
+
     # Check expr is valid
     if !isa(expr, Expr) || expr.head != :(=)
         throw(ArgumentError(
