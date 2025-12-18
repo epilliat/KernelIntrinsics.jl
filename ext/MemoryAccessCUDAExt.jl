@@ -6,8 +6,8 @@ using LLVM
 using LLVM.Interop: @asmcall
 
 # Import parent module and types
-import MemoryAccess: fence, atomic_load, atomic_store!, vectorized_load, vectorized_store!
-import MemoryAccess: vectorized_cached_load
+import MemoryAccess: fence, atomic_load, atomic_store!
+import MemoryAccess: _vload_batch, _vstore_batch!, _vload_norebase, _vstore_norebase!
 import MemoryAccess: Scope, Ordering
 import MemoryAccess: Workgroup, Device, System
 import MemoryAccess: Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
@@ -213,32 +213,27 @@ end
 
 
 
-CUDA.@device_override @inline function vectorized_load(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
+CUDA.@device_override @inline function _vload_batch(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
     sz = 0x01 << trailing_zeros(Nitem * sizeof(T)) # = largest power of 2 that divides Nitem*sizeof(T)
     ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,T},AS.Global}, pointer(A))
     return unsafe_load(ptr, idx, Val(sz))
 end
-
-
-#CUDA.@device_override @inline function vectorized_store!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}) where {T,Nitem}
-#    sz = 0x01 << trailing_zeros(Nitem * sizeof(T)) # = largest power of 2 that divides Nitem*sizeof(T)
-#    vec_values = Base.VecElement.(values)
-#    ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,Base.VecElement{T}},AS.Global}, pointer(A))
-#    unsafe_store!(ptr, vec_values, idx, Val(sz))
-#end
-
-CUDA.@device_override @inline function vectorized_store!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}) where {T,Nitem}
+CUDA.@device_override @inline function _vstore_batch!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}) where {T,Nitem}
     sz = 0x01 << trailing_zeros(Nitem * sizeof(T)) # = largest power of 2 that divides Nitem*sizeof(T)
     vec_values = values
     ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,T},AS.Global}, pointer(A))
     unsafe_store!(ptr, vec_values, idx, Val(sz))
 end
 
-
-CUDA.@device_override @inline function vectorized_cached_load(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
-    sz = 0x01 << trailing_zeros(Nitem * sizeof(T)) # = largest power of 2 that divides Nitem*sizeof(T)
-    ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,Base.VecElement{T}},AS.Global}, pointer(A))
-    return getfield.(unsafe_cached_load(ptr, idx, Val(sz)), :value)
+CUDA.@device_override @inline function _vload_norebase(A::AbstractArray{T}, idx, ::Val{Nitem})::NTuple{Nitem,T} where {T,Nitem}
+    ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,T},AS.Global}, pointer(A) + (idx - 1) * sizeof(T))
+    sz = 0x01 << trailing_zeros(Nitem * sizeof(T))
+    return unsafe_load(ptr, 1, Val(sz))
+end
+CUDA.@device_override @inline function _vstore_norebase!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}) where {T,Nitem}
+    ptr = reinterpret(Core.LLVMPtr{NTuple{Nitem,T},AS.Global}, pointer(A) + (idx - 1) * sizeof(T))
+    sz = 0x01 << trailing_zeros(Nitem * sizeof(T))
+    unsafe_store!(ptr, values, 1, Val(sz))
 end
 
 

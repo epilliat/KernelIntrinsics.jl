@@ -3,7 +3,7 @@ module MemoryAccess
 using KernelAbstractions
 
 export @fence, @access
-export vectorized_load, vectorized_store!
+export vload, vstore!
 
 export @shfl, @warpreduce, @warpfold, @vote
 #export atomic_store, atomic_load, fence
@@ -169,8 +169,8 @@ function fence end
 function atomic_store! end
 function atomic_load end
 
-
-include("vectorized_access.jl")
+include("helper.jl")
+include("vectorization.jl")
 include("warp.jl")
 include("macros.jl")
 

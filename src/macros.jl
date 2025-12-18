@@ -70,7 +70,42 @@ function scope_ordering(args...)
     return scope, ordering
 end
 
+"""
+    @fence [Scope] [Ordering]
 
+Insert a memory fence with specified scope and ordering.
+
+A memory fence ensures that memory operations before the fence are visible to other threads
+before operations after the fence. This is essential for correct synchronization in parallel GPU code.
+
+# Arguments
+- `Scope` (optional): Visibility scope, one of `Device` (default), `Workgroup`, or `System`
+- `Ordering` (optional): Memory ordering, one of `Acquire`, `Release`, `AcqRel` (default), or `SeqCst`
+
+Arguments can be specified in any order. `Weak`, `Volatile`, and `Relaxed` orderings are not valid for fences.
+
+# Generated PTX
+- `@fence` → `fence.acq_rel.gpu`
+- `@fence Workgroup` → `fence.acq_rel.cta`
+- `@fence System SeqCst` → `fence.sc.sys`
+
+# Example
+```julia
+@kernel function synchronized_kernel(X, Flag)
+    X[1] = 10
+    @fence  # Ensure X[1]=10 is visible before continuing
+    Flag[1] = 1
+end
+
+# Explicit scope and ordering
+@fence Device AcqRel
+@fence Workgroup Release
+@fence System SeqCst
+@fence SeqCst Device  # Order doesn't matter
+```
+
+See also: [`@access`](@ref)
+"""
 macro fence(args...)
     #No arguments - fallback to AcqRel and Device
     scope, ordering = scope_ordering(args...)
@@ -86,7 +121,63 @@ macro fence(args...)
     end
 end
 
+"""
+    @access [Scope] [Ordering] expr
 
+Perform a memory load or store with specified scope and ordering semantics.
+
+This macro provides fine-grained control over memory ordering for lock-free synchronization
+patterns on GPU. It generates appropriate `ld.acquire` or `st.release` PTX instructions.
+
+# Arguments
+- `Scope` (optional): Visibility scope, one of `Device` (default), `Workgroup`, or `System`
+- `Ordering` (optional): Memory ordering (see below)
+- `expr`: Either a load (`var = array[idx]`) or store (`array[idx] = value`) expression
+
+# Orderings
+**For loads** (default: `Acquire`):
+- `Acquire`: Subsequent reads see all writes before the corresponding release
+- `Relaxed`: No ordering guarantees
+- `Volatile`: Volatile load (scope-less)
+- `Weak`: Weak load (scope-less)
+
+**For stores** (default: `Release`):
+- `Release`: Prior writes are visible before this store
+- `Relaxed`: No ordering guarantees
+- `Volatile`: Volatile store (scope-less)
+- `Weak`: Weak store (scope-less)
+
+`AcqRel` and `SeqCst` are not valid for individual loads/stores (use `@fence` instead).
+`Volatile` and `Weak` cannot have an explicit scope.
+
+# Syntax Forms
+```julia
+@access array[idx] = value          # Release store (default)
+@access var = array[idx]            # Acquire load (default)
+@access array[idx]                  # Acquire load, returns value directly
+
+@access Release array[idx] = value  # Explicit ordering
+@access Acquire var = array[idx]    # Explicit ordering
+@access Device Release array[idx] = value  # Explicit scope and ordering
+```
+
+# Example
+```julia
+@kernel function producer_consumer(X, Flag)
+    if @index(Global, Linear) == 1
+        X[1] = 42
+        @access Flag[1] = 1  # Release store: X[1]=42 visible before Flag[1]=1
+    end
+
+    # Other threads wait
+    while (@access Acquire Flag[1]) != 1
+    end
+    # Now X[1] is guaranteed to be 42
+end
+```
+
+See also: [`@fence`](@ref)
+"""
 macro access(args...)
     expr = args[end]
     scope, ordering = scope_ordering(args[begin:end-1]...)
