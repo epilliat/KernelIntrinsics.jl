@@ -67,6 +67,18 @@ _shfl_recurse(op, x::Bool) = op(UInt32(x)) % Bool
     end
 end
 
+@generated function _shfl_recurse(op, val::NTuple{N,E}) where {N,E}
+    if isprimitivetype(E)
+        # Direct shuffle of each element
+        exprs = [:(op(val[$i])) for i in 1:N]
+        return :(tuple($(exprs...)))
+    else
+        # Recursive shuffle for complex element types
+        exprs = [:(_shfl_recurse(op, val[$i])) for i in 1:N]
+        return :(tuple($(exprs...)))
+    end
+end
+
 
 
 

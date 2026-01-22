@@ -1,4 +1,4 @@
-module MemoryAccessCUDAExt
+module KernelIntrinsicsCUDAExt
 
 using CUDA
 using CUDA: LLVMPtr, AS
@@ -6,21 +6,21 @@ using LLVM
 using LLVM.Interop: @asmcall
 
 # Import parent module and types
-import MemoryAccess: fence, atomic_load, atomic_store!
-import MemoryAccess: _vload_batch, _vstore_batch!, _vload_norebase, _vstore_norebase!
-import MemoryAccess: Scope, Ordering
-import MemoryAccess: Workgroup, Device, System
-import MemoryAccess: Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
+import KernelIntrinsics: fence, atomic_load, atomic_store!
+import KernelIntrinsics: _vload_batch, _vstore_batch!, _vload_norebase, _vstore_norebase!
+import KernelIntrinsics: Scope, Ordering
+import KernelIntrinsics: Workgroup, Device, System
+import KernelIntrinsics: Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
 
-import MemoryAccess: _shfl, _vote
-import MemoryAccess: Up, Down, Xor, Idx
-import MemoryAccess: All, Any, Uni, Ballot
+import KernelIntrinsics: _shfl, _vote
+import KernelIntrinsics: Up, Down, Xor, Idx
+import KernelIntrinsics: All, Any, Uni, Ballot
 # ============================================================================
 # CUDA/NVPTX backend implementation
 # ============================================================================
 
 """
-Mapping from MemoryAccess fence scopes to PTX scope identifiers.
+Mapping from KernelIntrinsics fence scopes to PTX scope identifiers.
 """
 const SCOPE_TO_PTX = Dict{Type{<:Scope},String}(
     Workgroup => "cta",
@@ -29,7 +29,7 @@ const SCOPE_TO_PTX = Dict{Type{<:Scope},String}(
 )
 
 """
-Mapping from MemoryAccess fence orderings to PTX memory ordering semantics.
+Mapping from KernelIntrinsics fence orderings to PTX memory ordering semantics.
 Note: PTX does not have separate acquire and release fence instructions,
 so both Acquire and Release map to acq_rel.
 """

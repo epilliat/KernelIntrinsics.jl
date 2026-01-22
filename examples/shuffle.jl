@@ -1,7 +1,7 @@
 using Pkg
 Pkg.activate("local")
 using Revise
-using MemoryAccess
+using KernelIntrinsics
 
 using KernelAbstractions, CUDA
 

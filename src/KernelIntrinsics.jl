@@ -1,9 +1,10 @@
-module MemoryAccess
+module KernelIntrinsics
 
 using KernelAbstractions
 
 export @fence, @access
 export vload, vstore!
+export vload_multi, vstore_multi!
 
 export @shfl, @warpreduce, @warpfold, @vote
 #export atomic_store, atomic_load, fence
@@ -32,6 +33,8 @@ abstract type Scope end
 Thread block/workgroup scope fence.
 Synchronizes memory operations within a single thread block/workgroup.
 """
+
+
 struct Workgroup <: Scope end
 
 """
@@ -175,4 +178,4 @@ include("warp.jl")
 include("macros.jl")
 
 
-end # module MemoryAccess
+end # module KernelIntrinsics

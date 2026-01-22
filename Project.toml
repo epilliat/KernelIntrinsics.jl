@@ -1,4 +1,4 @@
-name = "MemoryAccess"  
+name = "KernelIntrinsics"  
 uuid = "f9588fbb-d238-4998-b15a-468e8766d49a" 
 authors = ["Emmanuel Pilliat <epilliat@gmail.com>"]
 version = "0.1.0"
@@ -12,7 +12,7 @@ LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 
 [extensions]
-MemoryAccessCUDAExt = "CUDA"
+KernelIntrinsicsCUDAExt = "CUDA"
 
 [compat]
 CUDA = "5"

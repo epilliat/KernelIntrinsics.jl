@@ -163,7 +163,11 @@ end
         $(exprs...)
     end
 end
-
+@inline function vload_multi(a::AbstractArray{T}, i, ::Val{Nitem})::NTuple{Nitem,T} where {Nitem,T}
+    mod = ((Int(pointer(a)) + i - 1) % Nitem) + 1
+    values = vload_multi(a, i, mod, Val(Nitem))::NTuple{Nitem,T}
+    return values
+end
 @inline @generated function vstore_pattern!(a, i, values::NTuple{Nitem,T}, ::Val{pattern}) where {Nitem,T,pattern}
     P = length(pattern)
     store_exprs = []
@@ -202,6 +206,10 @@ end
     quote
         $(exprs...)
     end
+end
+@inline function vstore_multi!(a::AbstractArray{T}, i, values::NTuple{Nitem,T}) where {Nitem,T}
+    mod = ((Int(pointer(a)) + i - 1) % Nitem) + 1
+    vstore_multi!(a, i, mod, values)
 end
 
 ## CPU Fallbacks

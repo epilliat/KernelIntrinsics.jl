@@ -1,9 +1,9 @@
 using Documenter
-using MemoryAccess
+using KernelIntrinsics
 
 makedocs(
-    sitename="MemoryAccess.jl",
-    modules=[MemoryAccess],
+    sitename="KernelIntrinsics.jl",
+    modules=[KernelIntrinsics],
     checkdocs=:exports,  # Only check exported symbols
     pages=[
         "Home" => "index.md",
@@ -17,6 +17,6 @@ makedocs(
 
 # For GitHub Pages deployment
 deploydocs(
-    repo="github.com/epilliat/MemoryAccess.jl.git",
+    repo="github.com/epilliat/KernelIntrinsics.jl.git",
     devbranch="main",
 )

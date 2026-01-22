@@ -1,6 +1,6 @@
-# MemoryAccess.jl
+# KernelIntrinsics.jl
 
-A Julia package providing low-level memory access primitives and warp-level operations for GPU programming with KernelAbstractions.jl. MemoryAccess.jl enables fine-grained control over memory ordering, synchronization, and vectorized operations for high-performance GPU kernels.
+A Julia package providing low-level memory access primitives and warp-level operations for GPU programming with KernelAbstractions.jl. KernelIntrinsics.jl enables fine-grained control over memory ordering, synchronization, and vectorized operations for high-performance GPU kernels.
 
 ## Features
 
@@ -14,19 +14,19 @@ A Julia package providing low-level memory access primitives and warp-level oper
 
 ## Cross-Architecture Support
 
-Currently, MemoryAccess.jl is implemented exclusively for CUDA GPUs via the `CUDABackend`. The package leverages CUDA-specific PTX instructions for memory fences (`fence.acq_rel.gpu`), ordered memory access (`ld.acquire.gpu`, `st.release.gpu`), warp shuffle operations, and vectorized memory transactions.
+Currently, KernelIntrinsics.jl is implemented exclusively for CUDA GPUs via the `CUDABackend`. The package leverages CUDA-specific PTX instructions for memory fences (`fence.acq_rel.gpu`), ordered memory access (`ld.acquire.gpu`, `st.release.gpu`), warp shuffle operations, and vectorized memory transactions.
 
 While the current implementation is CUDA-specific, the macro-based API is designed with portability in mind. Future releases may extend support to other GPU backends (AMD ROCm, Intel oneAPI, Apple Metal). Contributions to enable cross-platform support are welcome.
 
 ## Installation
 ```julia
 using Pkg
-Pkg.add("MemoryAccess")
+Pkg.add("KernelIntrinsics")
 ```
 
 ## Quick Start
 ```julia
-using MemoryAccess
+using KernelIntrinsics
 using KernelAbstractions, CUDA
 
 @kernel function example_kernel(X, Flag)

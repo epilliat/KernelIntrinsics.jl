@@ -4,7 +4,7 @@
 
 Use `@fence` to ensure memory operations are visible across threads before proceeding:
 ```julia
-using MemoryAccess
+using KernelIntrinsics
 using KernelAbstractions, CUDA
 
 @kernel function fence_kernel(X, Flag)
@@ -66,7 +66,7 @@ shfl_kernel(CUDABackend())(dst, src; ndrange=32)
 
 ### Shuffle with Custom Types
 
-Unlike CUDA.jl, MemoryAccess.jl supports shuffle operations on arbitrary user-defined bitstype structs, including nested and composite types:
+Unlike CUDA.jl, KernelIntrinsics.jl supports shuffle operations on arbitrary user-defined bitstype structs, including nested and composite types:
 ```julia
 struct Sub
     a::Float16

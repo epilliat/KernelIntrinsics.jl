@@ -1,4 +1,4 @@
-using MemoryAccess
+using KernelIntrinsics
 
 using KernelAbstractions, CUDA
 

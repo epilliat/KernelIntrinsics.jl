@@ -1,6 +1,6 @@
 using Test
 using KernelAbstractions
-using MemoryAccess
+using KernelIntrinsics
 using CUDA
 
 ## Helper function to count number of vectorize loads in asm
@@ -22,6 +22,7 @@ end
 @testset "CUDA" begin
     @testset "access and fence" begin
         include("cuda/access_fences.jl")
+        include("cuda/shfl.jl")
         include("cuda/vectorized.jl")
     end
 end

@@ -14,7 +14,7 @@ function scope_ordering(args...)
 
     # Validate all arguments are defined
     for arg in args
-        if !isdefined(MemoryAccess, arg)
+        if !isdefined(KernelIntrinsics, arg)
             valid_scopes = join(nameof.(subtypes(Scope)), ", ")
             valid_orderings = join(nameof.(subtypes(Ordering)), ", ")
             throw(ArgumentError(
