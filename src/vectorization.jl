@@ -1,5 +1,45 @@
 
+"""
+    vload_multi(A::AbstractArray{T}, i, ::Val{Nitem}) -> NTuple{Nitem,T}
+
+Load `Nitem` elements from array `A` starting at index `i`, automatically handling arbitrary alignment.
+
+Computes alignment at runtime (`mod = (pointer_offset + i - 1) % Nitem + 1`) and dispatches 
+to a statically-compiled load pattern via a switch table. This generates a mix of 
+`ld.global.v4`, `ld.global.v2`, and scalar loads to maximize throughput.
+
+# Example
+```julia
+src = cu(Int32.(1:100))
+
+# Works for any starting index — alignment handled automatically
+values = vload_multi(src, 7, Val(8))  # loads elements 7:14
+```
+
+See also: [`vload`](@ref), [`vstore_multi!`](@ref)
+"""
 function vload_multi end
+
+"""
+    vstore_multi!(A::AbstractArray{T}, i, values::NTuple{Nitem,T}) -> Nothing
+
+Store `Nitem` elements to array `A` starting at index `i`, automatically handling arbitrary alignment.
+
+Computes alignment at runtime (`mod = (pointer_offset + i - 1) % Nitem + 1`) and dispatches 
+to a statically-compiled store pattern via a switch table. This generates a mix of 
+`st.global.v4`, `st.global.v2`, and scalar stores to maximize throughput.
+
+# Example
+```julia
+dst = cu(zeros(Int32, 100))
+
+# Works for any starting index — alignment handled automatically
+vstore_multi!(dst, 7, (Int32(1), Int32(2), Int32(3), Int32(4)))
+```
+
+See also: [`vstore!`](@ref), [`vload_multi`](@ref)
+"""
+function vstore_multi! end
 
 
 """

@@ -3,17 +3,108 @@
 
 
 
-abstract type Direction end
-struct Up <: Direction end
-struct Down <: Direction end
-struct Xor <: Direction end
-struct Idx <: Direction end  # for regular shfl_sync (index-based)
+"""
+    Direction
 
+Abstract type representing warp shuffle directions.
+
+Subtypes:
+- [`Up`](@ref): Shuffle values from lower lane indices
+- [`Down`](@ref): Shuffle values from higher lane indices  
+- [`Xor`](@ref): Shuffle values using XOR of lane indices
+- [`Idx`](@ref): Shuffle values from a specific lane index
+"""
+abstract type Direction end
+
+"""
+    Up <: Direction
+
+Shuffle direction where each lane receives a value from a lane with a lower index.
+
+`@shfl(Up, val, offset)`: Lane `i` receives the value from lane `i - offset`.
+Lanes where `i < offset` keep their original value.
+
+Result for `offset=1`: `[1, 1, 2, 3, 4, ..., 31]`
+"""
+struct Up <: Direction end
+
+"""
+    Down <: Direction
+
+Shuffle direction where each lane receives a value from a lane with a higher index.
+
+`@shfl(Down, val, offset)`: Lane `i` receives the value from lane `i + offset`.
+Lanes where `i + offset >= warpsize` keep their original value.
+
+Result for `offset=1`: `[2, 3, 4, ..., 31, 32, 32]`
+"""
+struct Down <: Direction end
+
+"""
+    Xor <: Direction
+
+Shuffle direction where each lane exchanges values based on XOR of lane indices.
+
+`@shfl(Xor, val, mask)`: Lane `i` receives the value from lane `i ⊻ mask`.
+
+Common patterns:
+- `mask=1`: Swap adjacent pairs (0↔1, 2↔3, ...)
+- `mask=16`: Swap first and second half of warp
+"""
+struct Xor <: Direction end
+
+"""
+    Idx <: Direction
+
+Shuffle direction where all lanes receive a value from a specific lane index.
+
+`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane`.
+
+Useful for broadcasting a value from one lane to all others.
+"""
+struct Idx <: Direction end
+
+"""
+    Mode
+
+Abstract type representing warp vote modes.
+
+Subtypes:
+- [`All`](@ref): True if predicate is true for all lanes
+- [`Any`](@ref): True if predicate is true for any lane
+- [`Uni`](@ref): True if predicate is uniform across all lanes
+- [`Ballot`](@ref): Returns a bitmask of predicate values
+"""
 abstract type Mode end
+
+"""
+    All <: Mode
+
+Vote mode that returns true if the predicate is true for all participating lanes.
+"""
 struct All <: Mode end
+
+"""
+    Any <: Mode
+
+Vote mode that returns true if the predicate is true for any participating lane.
+"""
 struct Any <: Mode end
+
+"""
+    Uni <: Mode
+
+Vote mode that returns true if the predicate has the same value across all participating lanes.
+"""
 struct Uni <: Mode end
+
+"""
+    Ballot <: Mode
+
+Vote mode that returns a UInt32 bitmask where bit `i` is set if lane `i`'s predicate is true.
+"""
 struct Ballot <: Mode end
+
 
 
 
@@ -82,14 +173,74 @@ end
 
 
 
-# Macro to dispatch on DirectType type
+"""
+    @shfl(direction, val, src, [warpsize=32], [mask=0xffffffff])
+
+Perform a warp shuffle operation, exchanging values between lanes within a warp.
+
+# Arguments
+- `direction`: Shuffle direction ([`Up`](@ref), [`Down`](@ref), [`Xor`](@ref), or [`Idx`](@ref))
+- `val`: Value to shuffle (supports primitives, structs, and NTuples)
+- `src`: Offset (for Up/Down), XOR mask (for Xor), or source lane (for Idx)
+- `warpsize`: Warp size (default: 32)
+- `mask`: Lane participation mask (default: 0xffffffff for all lanes)
+
+# Example
+```julia
+@kernel function shfl_kernel(dst, src)
+    I = @index(Global, Linear)
+    val = src[I]
+    
+    shuffled = @shfl(Up, val, 1)      # Get value from lane below
+    shuffled = @shfl(Down, val, 1)    # Get value from lane above
+    shuffled = @shfl(Xor, val, 1)     # Swap with adjacent lane
+    shuffled = @shfl(Idx, val, 0)     # Broadcast lane 0 to all
+    
+    dst[I] = shuffled
+end
+```
+
+See also: [`@warpreduce`](@ref), [`@warpfold`](@ref)
+"""
 macro shfl(DirectType, val, src, ws=32, mask=0xffffffff)
     return quote
         _shfl($DirectType, $(esc(mask)), $(esc(val)), $(esc(src)), Val($(esc(ws))))
     end
 end
 
+"""
+    @warpreduce(val, lane, [op=+], [warpsize=32], [mask=0xffffffff])
 
+Perform an inclusive prefix scan (reduction) within a warp.
+
+Each lane `i` accumulates values from lanes `1` to `i` using the specified operator.
+Uses shuffle-up operations internally.
+
+# Arguments
+- `val`: Value to reduce (modified in-place)
+- `lane`: Current lane index (1-based)
+- `op`: Binary reduction operator (default: `+`)
+- `warpsize`: Warp size (default: 32)
+- `mask`: Lane participation mask (default: 0xffffffff)
+
+# Example
+```julia
+@kernel function scan_kernel(dst, src)
+    I = @index(Global, Linear)
+    val = src[I]
+    lane = (I - 1) % 32 + 1
+    
+    @warpreduce(val, lane, +)
+    
+    dst[I] = val  # Contains prefix sum
+end
+
+# Input:  [1, 2, 3, 4, ..., 32]
+# Output: [1, 3, 6, 10, ..., 528]
+```
+
+See also: [`@warpfold`](@ref), [`@shfl`](@ref)
+"""
 macro warpreduce(val, lane, op=:+, ws=32, mask=0xffffffff)
     quote
         local offset = 1
@@ -103,6 +254,43 @@ macro warpreduce(val, lane, op=:+, ws=32, mask=0xffffffff)
     end
 end
 
+
+
+"""
+    @warpfold(val, lane, [op=+], [warpsize=32], [mask=0xffffffff])
+
+Perform a warp-wide reduction, folding all values to a single result in lane 1.
+
+Combines all values across the warp using the specified operator.
+Uses shuffle-down operations internally.
+
+# Arguments
+- `val`: Value to reduce (modified in-place)
+- `lane`: Current lane index (1-based, unused but kept for API consistency)
+- `op`: Binary reduction operator (default: `+`)
+- `warpsize`: Warp size (default: 32)
+- `mask`: Lane participation mask (default: 0xffffffff)
+
+# Example
+```julia
+@kernel function reduce_kernel(dst, src)
+    I = @index(Global, Linear)
+    val = src[I]
+    lane = (I - 1) % 32 + 1
+    
+    @warpfold(val, lane, +)
+    
+    if lane == 1
+        dst[1] = val  # Contains sum of all 32 values
+    end
+end
+
+# Input:  [1, 2, 3, ..., 32]
+# Output: dst[1] = 528
+```
+
+See also: [`@warpreduce`](@ref), [`@shfl`](@ref)
+"""
 macro warpfold(val, lane, op=:+, ws=32, mask=0xffffffff)
     quote
         local offset = 1
@@ -114,6 +302,34 @@ macro warpfold(val, lane, op=:+, ws=32, mask=0xffffffff)
     end
 end
 
+
+"""
+    @vote(mode, predicate, [mask=0xffffffff])
+
+Perform a warp vote operation, evaluating a predicate across all lanes.
+
+# Arguments
+- `mode`: Vote mode ([`All`](@ref), [`Any`](@ref), [`Uni`](@ref), or [`Ballot`](@ref))
+- `predicate`: Boolean predicate to evaluate
+- `mask`: Lane participation mask (default: 0xffffffff)
+
+# Example
+```julia
+@kernel function vote_kernel(dst, src, threshold)
+    I = @index(Global, Linear)
+    val = src[I]
+    
+    all_above = @vote(All, val > threshold)   # True if all lanes above threshold
+    any_above = @vote(Any, val > threshold)   # True if any lane above threshold
+    uniform = @vote(Uni, val > threshold)     # True if all lanes have same result
+    mask = @vote(Ballot, val > threshold)     # Bitmask of which lanes are above
+    
+    dst[I] = mask
+end
+```
+
+See also: [`@shfl`](@ref)
+"""
 macro vote(ModeType, pred, mask=0xffffffff)
     return quote
         _vote($ModeType, $(esc(mask)), $(esc(pred)))
