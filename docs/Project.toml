@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+KernelIntrinsics = "f9588fbb-d238-4998-b15a-468e8766d49a"
+
+[compat]
+Documenter = "1"

@@ -1,0 +1,31 @@
+name = "KernelIntrinsics"
+uuid = "f9588fbb-d238-4998-b15a-468e8766d49a"
+version = "0.1.2"
+authors = ["Emmanuel Pilliat <epilliat@gmail.com>"]
+
+[deps]
+GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
+
+[weakdeps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+
+[extensions]
+KernelIntrinsicsCUDAExt = "CUDA"
+
+[compat]
+CUDA = "5"
+GPUArrays = "11.4.0"
+GPUArraysCore = "0.2.0"
+KernelAbstractions = "0.9.38"
+LLVM = "9"
+julia = "1.10"
+
+[extras]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["CUDA", "Test"]
