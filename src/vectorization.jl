@@ -1,12 +1,13 @@
-
 """
     vload_multi(A::AbstractArray{T}, i, ::Val{Nitem}) -> NTuple{Nitem,T}
 
 Load `Nitem` elements from array `A` starting at index `i`, automatically handling arbitrary alignment.
+`Nitem` must be a positive power of 2.
 
-Computes alignment at runtime (`mod = (pointer_offset + i - 1) % Nitem + 1`) and dispatches 
-to a statically-compiled load pattern via a switch table. This generates a mix of 
-`ld.global.v4`, `ld.global.v2`, and scalar loads to maximize throughput.
+Computes alignment at runtime as `mod = (base_ptr_in_elements + (i - 1)) % Nitem + 1`, where
+`base_ptr_in_elements = pointer(A) ÷ sizeof(T)`, and dispatches to a statically-compiled load
+pattern via a switch table. This generates a mix of `ld.global.v4`, `ld.global.v2`, and scalar
+loads to maximize throughput.
 
 # Example
 ```julia
@@ -24,10 +25,12 @@ function vload_multi end
     vstore_multi!(A::AbstractArray{T}, i, values::NTuple{Nitem,T}) -> Nothing
 
 Store `Nitem` elements to array `A` starting at index `i`, automatically handling arbitrary alignment.
+`Nitem` must be a positive power of 2.
 
-Computes alignment at runtime (`mod = (pointer_offset + i - 1) % Nitem + 1`) and dispatches 
-to a statically-compiled store pattern via a switch table. This generates a mix of 
-`st.global.v4`, `st.global.v2`, and scalar stores to maximize throughput.
+Computes alignment at runtime as `mod = (base_ptr_in_elements + (i - 1)) % Nitem + 1`, where
+`base_ptr_in_elements = pointer(A) ÷ sizeof(T)`, and dispatches to a statically-compiled store
+pattern via a switch table. This generates a mix of `st.global.v4`, `st.global.v2`, and scalar
+stores to maximize throughput.
 
 # Example
 ```julia
@@ -41,27 +44,32 @@ See also: [`vstore!`](@ref), [`vload_multi`](@ref)
 """
 function vstore_multi! end
 
-
 """
     vload(A::AbstractArray{T}, idx, ::Val{Nitem}, ::Val{Rebase}=Val(true)) -> NTuple{Nitem,T}
 
 Load `Nitem` elements from array `A` as a tuple, using vectorized memory operations on GPU.
+`Nitem` must be a positive power of 2.
 
 # Arguments
 - `A`: Source array
 - `idx`: Starting index
-- `Nitem`: Number of elements to load (must be a power of 2)
+- `Nitem`: Number of elements to load (must be a positive power of 2)
 - `Rebase`: Indexing mode (default: `Val(true)`)
 
 # Indexing Modes
-- `Val(true)` (rebased): Index is multiplied by `Nitem`, so `idx=2` loads elements `[5,6,7,8]` for `Nitem=4`. This mode generates optimal aligned vector loads (`ld.global.v4`).
-- `Val(false)` (direct): Loads starting directly at `idx`, so `idx=2` loads elements `[2,3,4,5]`. Handles misaligned access by decomposing into smaller aligned loads.
+- `Val(true)` (rebased): Uses 1-based block indexing — `idx` selects the `idx`-th contiguous
+  block of `Nitem` elements, i.e. loads from `(idx-1)*Nitem + 1` to `idx*Nitem`. For example,
+  `idx=2` loads elements `[5,6,7,8]` for `Nitem=4`. When the array base pointer is
+  `Nitem`-aligned, this generates optimal aligned vector loads (`ld.global.v4`); otherwise
+  falls back to [`vload_multi`](@ref).
+- `Val(false)` (direct): Loads starting directly at `idx`, so `idx=2` loads elements
+  `[2,3,4,5]`. Always uses [`vload_multi`](@ref) to handle potential misalignment.
 
 # Example
 ```julia
 a = CuArray{Int32}(1:16)
 
-# Rebased indexing (default): idx=2 → loads elements 5,6,7,8
+# Rebased indexing (default): idx=2 → loads block 2, i.e. elements 5,6,7,8
 values = vload(a, 2, Val(4))  # returns (5, 6, 7, 8)
 
 # Direct indexing: idx=2 → loads elements 2,3,4,5
@@ -70,15 +78,60 @@ values = vload(a, 2, Val(4), Val(false))  # returns (2, 3, 4, 5)
 
 See also: [`vstore!`](@ref)
 """
+function vload end
+
+"""
+    vstore!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}, ::Val{Rebase}=Val(true)) -> Nothing
+
+Store `Nitem` elements from a tuple to array `A`, using vectorized memory operations on GPU.
+`Nitem` must be a positive power of 2.
+
+# Arguments
+- `A`: Destination array
+- `idx`: Starting index
+- `values`: Tuple of `Nitem` elements to store
+- `Rebase`: Indexing mode (default: `Val(true)`)
+
+# Indexing Modes
+- `Val(true)` (rebased): Uses 1-based block indexing — `idx` selects the `idx`-th contiguous
+  block of `Nitem` elements, i.e. stores to `(idx-1)*Nitem + 1` through `idx*Nitem`. For
+  example, `idx=2` stores to elements `[5,6,7,8]` for `Nitem=4`. When the array base pointer
+  is `Nitem`-aligned, this generates optimal aligned vector stores (`st.global.v4`); otherwise
+  falls back to [`vstore_multi!`](@ref).
+- `Val(false)` (direct): Stores starting directly at `idx`, so `idx=2` stores to elements
+  `[2,3,4,5]`. Always uses [`vstore_multi!`](@ref) to handle potential misalignment.
+
+# Example
+```julia
+b = CUDA.zeros(Int32, 16)
+
+# Rebased indexing (default): idx=2 → stores to block 2, i.e. elements 5,6,7,8
+vstore!(b, 2, (Int32(10), Int32(20), Int32(30), Int32(40)))
+
+# Direct indexing: idx=2 → stores to elements 2,3,4,5
+vstore!(b, 2, (Int32(10), Int32(20), Int32(30), Int32(40)), Val(false))
+```
+
+See also: [`vload`](@ref)
+"""
+function vstore! end
+
 @inline function vload(A::DenseArray{T}, idx, ::Val{Nitem}, ::Val{Rebase}=Val(true))::NTuple{Nitem,T} where {T,Nitem,Rebase}
+    # Fallback for non-power-of-2 element sizes
+    if !ispow2(sizeof(T))
+        if Rebase
+            base = (idx - 1) * Nitem + 1
+            return ntuple(i -> A[base+i-1], Val(Nitem))
+        else
+            return ntuple(i -> A[idx+i-1], Val(Nitem))
+        end
+    end
     if Rebase
         _llvm_barrier()
         elem_offset = Int(pointer(A)) ÷ sizeof(T)
         if elem_offset % Nitem == 0
-            # Aligned: direct vectorized load
             result = _vload_batch(A, idx, Val(Nitem))::NTuple{Nitem,T}
         else
-            # Misaligned: convert to linear index and use vload_multi
             linear_idx = (idx - 1) * Nitem + 1
             result = vload_multi(A, linear_idx, Val(Nitem))::NTuple{Nitem,T}
         end
@@ -99,36 +152,21 @@ end
     return result
 end
 
-
-"""
-    vstore!(A::AbstractArray{T}, idx, values::NTuple{Nitem,T}, ::Val{Rebase}=Val(true)) -> Nothing
-
-Store `Nitem` elements from a tuple to array `A`, using vectorized memory operations on GPU.
-
-# Arguments
-- `A`: Destination array
-- `idx`: Starting index
-- `values`: Tuple of `Nitem` elements to store
-- `Rebase`: Indexing mode (default: `Val(true)`)
-
-# Indexing Modes
-- `Val(true)` (rebased): Index is multiplied by `Nitem`, so `idx=2` stores to elements `[5,6,7,8]` for `Nitem=4`. This mode generates optimal aligned vector stores (`st.global.v4`).
-- `Val(false)` (direct): Stores starting directly at `idx`, so `idx=2` stores to elements `[2,3,4,5]`. Handles misaligned access by decomposing into smaller aligned stores.
-
-# Example
-```julia
-b = CUDA.zeros(Int32, 16)
-
-# Rebased indexing (default): idx=2 → stores to elements 5,6,7,8
-vstore!(b, 2, (Int32(10), Int32(20), Int32(30), Int32(40)))
-
-# Direct indexing: idx=2 → stores to elements 2,3,4,5
-vstore!(b, 2, (Int32(10), Int32(20), Int32(30), Int32(40)), Val(false))
-```
-
-See also: [`vload`](@ref)
-"""
 @inline function vstore!(A::DenseArray{T}, idx, values::NTuple{Nitem,T}, ::Val{Rebase}=Val(true)) where {T,Nitem,Rebase}
+    # Fallback for non-power-of-2 element sizes
+    if !ispow2(sizeof(T))
+        if Rebase
+            base = (idx - 1) * Nitem + 1
+            for i in 1:Nitem
+                A[base+i-1] = values[i]
+            end
+        else
+            for i in 1:Nitem
+                A[idx+i-1] = values[i]
+            end
+        end
+        return nothing
+    end
     if Rebase
         _llvm_barrier()
         elem_offset = Int(pointer(A)) ÷ sizeof(T)

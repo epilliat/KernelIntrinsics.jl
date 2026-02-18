@@ -24,5 +24,6 @@ end
         include("cuda/access_fences.jl")
         include("cuda/shfl.jl")
         include("cuda/vectorization_test.jl")
+        include("cuda/vectorization_custom_test.jl")
     end
 end

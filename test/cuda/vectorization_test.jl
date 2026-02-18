@@ -287,70 +287,206 @@ end
 
 
 
-@testset "vload/vstore with strided views" begin
-    @testset "strided view (step=3)" begin
-        a = collect(Int32, 1:30)
-        v = view(a, 2:3:30)  # elements: 2, 5, 8, 11, 14, 17, 20, 23, 26, 29
+@testset "vload/vstore with strided GPU views" begin
+    @testset "strided view (step=3) load" begin
+        @kernel function test_vload_strided(a, b)
+            vals = KernelIntrinsics.vload(a, 1, Val(4), Val(false))
+            for i in 1:4
+                b[i] = vals[i]
+            end
+        end
 
-        vals = vload(v, 1, Val(4), Val(false))
-        @test vals == (Int32(2), Int32(5), Int32(8), Int32(11))
-
-        vals2 = vload(v, 3, Val(4), Val(false))
-        @test vals2 == (Int32(8), Int32(11), Int32(14), Int32(17))
-
-        # rebase: idx=2 → elements 5..8 of the view
-        vals3 = vload(v, 2, Val(4))
-        @test vals3 == (Int32(14), Int32(17), Int32(20), Int32(23))
+        a = CuArray{Int32}(1:30)
+        v = view(a, 2:3:30)  # elements: 2, 5, 8, 11, ...
+        b = CUDA.zeros(Int32, 4)
+        test_vload_strided(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == Int32[2, 5, 8, 11]
     end
 
-    @testset "strided view store (step=3)" begin
-        a = zeros(Int32, 30)
-        v = view(a, 2:3:30)
+    @testset "strided view (step=3) store" begin
+        @kernel function test_vstore_strided(b)
+            values = (Int32(10), Int32(20), Int32(30), Int32(40))
+            KernelIntrinsics.vstore!(b, 1, values, Val(false))
+        end
 
-        vstore!(v, 1, (Int32(10), Int32(20), Int32(30), Int32(40)), Val(false))
-        @test a[2] == 10
-        @test a[5] == 20
-        @test a[8] == 30
-        @test a[11] == 40
+        b = CUDA.zeros(Int32, 30)
+        v = view(b, 2:3:30)
+        test_vstore_strided(CUDABackend())(v; ndrange=1)
+        synchronize(CUDABackend())
+        @test CUDA.@allowscalar b[2] == 10
+        @test CUDA.@allowscalar b[5] == 20
+        @test CUDA.@allowscalar b[8] == 30
+        @test CUDA.@allowscalar b[11] == 40
     end
 
-    @testset "fancy indexing view" begin
-        a = collect(Int32, 1:20)
-        v = view(a, [3, 7, 1, 12, 19, 5, 10, 8])
+    @testset "strided view (step=3) rebase" begin
+        @kernel function test_vload_strided_rebase(a, b)
+            vals = KernelIntrinsics.vload(a, 2, Val(4))  # rebase: elements 5..8 of view
+            for i in 1:4
+                b[i] = vals[i]
+            end
+        end
 
-        vals = vload(v, 1, Val(4), Val(false))
-        @test vals == (Int32(3), Int32(7), Int32(1), Int32(12))
-
-        vals2 = vload(v, 5, Val(4), Val(false))
-        @test vals2 == (Int32(19), Int32(5), Int32(10), Int32(8))
-
-        # rebase: idx=1 → elements 1..4, idx=2 → elements 5..8
-        vals3 = vload(v, 2, Val(4))
-        @test vals3 == (Int32(19), Int32(5), Int32(10), Int32(8))
+        a = CuArray{Int32}(1:30)
+        v = view(a, 2:3:30)  # elements: 2,5,8,11,14,17,20,23,26,29
+        b = CUDA.zeros(Int32, 4)
+        test_vload_strided_rebase(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == Int32[14, 17, 20, 23]
     end
 
-    @testset "fancy indexing store" begin
-        a = zeros(Int32, 20)
-        v = view(a, [3, 7, 1, 12])
+    @testset "fancy indexing view load" begin
+        @kernel function test_vload_fancy(a, b)
+            vals = KernelIntrinsics.vload(a, 1, Val(4), Val(false))
+            for i in 1:4
+                b[i] = vals[i]
+            end
+        end
 
-        vstore!(v, 1, (Int32(100), Int32(200), Int32(300), Int32(400)), Val(false))
-        @test a[3] == 100
-        @test a[7] == 200
-        @test a[1] == 300
-        @test a[12] == 400
+        a = CuArray{Int32}(1:20)
+        v = view(a, CuArray([3, 7, 1, 12, 19, 5, 10, 8]))
+        b = CUDA.zeros(Int32, 4)
+        test_vload_fancy(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == Int32[3, 7, 1, 12]
+    end
+
+    @testset "fancy indexing view store" begin
+        @kernel function test_vstore_fancy(b)
+            values = (Int32(100), Int32(200), Int32(300), Int32(400))
+            KernelIntrinsics.vstore!(b, 1, values, Val(false))
+        end
+
+        b = CUDA.zeros(Int32, 20)
+        v = view(b, CuArray([3, 7, 1, 12]))
+        test_vstore_fancy(CUDABackend())(v; ndrange=1)
+        synchronize(CUDABackend())
+        @test CUDA.@allowscalar b[3] == 100
+        @test CUDA.@allowscalar b[7] == 200
+        @test CUDA.@allowscalar b[1] == 300
+        @test CUDA.@allowscalar b[12] == 400
     end
 
     @testset "roundtrip strided view" begin
-        a = collect(Int32, 1:30)
-        b = zeros(Int32, 30)
+        @kernel function test_roundtrip_strided(a, b)
+            vals = KernelIntrinsics.vload(a, 1, Val(4), Val(false))
+            KernelIntrinsics.vstore!(b, 1, vals, Val(false))
+        end
+
+        a = CuArray{Int32}(1:30)
+        b = CUDA.zeros(Int32, 30)
         va = view(a, 2:3:30)
         vb = view(b, 2:3:30)
+        test_roundtrip_strided(CUDABackend())(va, vb; ndrange=1)
+        synchronize(CUDABackend())
+        @test CUDA.@allowscalar b[2] == 2
+        @test CUDA.@allowscalar b[5] == 5
+        @test CUDA.@allowscalar b[8] == 8
+        @test CUDA.@allowscalar b[11] == 11
+    end
+end
 
-        vals = vload(va, 1, Val(4), Val(false))
-        vstore!(vb, 1, vals, Val(false))
-        @test b[2] == 2
-        @test b[5] == 5
-        @test b[8] == 8
-        @test b[11] == 11
+
+@testset "vload/vstore UInt8" begin
+    @kernel function test_vload_u8(a, b)
+        vals = KernelIntrinsics.vload(a, 1, Val(4))
+        for i in 1:4
+            b[i] = vals[i]
+        end
+    end
+
+    @kernel function test_vstore_u8(b)
+        values = (UInt8(10), UInt8(20), UInt8(30), UInt8(40))
+        KernelIntrinsics.vstore!(b, 1, values)
+    end
+
+    @testset "vload rebase" begin
+        a = CuArray{UInt8}(UInt8.(1:16))
+        b = CUDA.zeros(UInt8, 4)
+        test_vload_u8(CUDABackend())(a, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8[1, 2, 3, 4]
+    end
+
+    @testset "vload norebase" begin
+        @kernel function test_vload_u8_norebase(a, b)
+            vals = KernelIntrinsics.vload(a, 3, Val(4), Val(false))
+            for i in 1:4
+                b[i] = vals[i]
+            end
+        end
+
+        a = CuArray{UInt8}(UInt8.(1:16))
+        b = CUDA.zeros(UInt8, 4)
+        test_vload_u8_norebase(CUDABackend())(a, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8[3, 4, 5, 6]
+    end
+
+    @testset "vstore rebase" begin
+        b = CUDA.zeros(UInt8, 16)
+        test_vstore_u8(CUDABackend())(b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b)[1:4] == UInt8[10, 20, 30, 40]
+    end
+
+    @testset "vload rebase view offset 1" begin
+        a = CuArray{UInt8}(UInt8.(1:16))
+        v = view(a, 2:16)
+        b = CUDA.zeros(UInt8, 4)
+        test_vload_u8(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8[2, 3, 4, 5]
+    end
+
+    @testset "vload rebase view offset 3" begin
+        a = CuArray{UInt8}(UInt8.(1:16))
+        v = view(a, 4:16)
+        b = CUDA.zeros(UInt8, 4)
+        test_vload_u8(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8[4, 5, 6, 7]
+    end
+
+    @testset "vload norebase view offset 1" begin
+        @kernel function test_vload_u8_norebase_v(a, b)
+            vals = KernelIntrinsics.vload(a, 1, Val(4), Val(false))
+            for i in 1:4
+                b[i] = vals[i]
+            end
+        end
+
+        a = CuArray{UInt8}(UInt8.(1:16))
+        v = view(a, 2:16)
+        b = CUDA.zeros(UInt8, 4)
+        test_vload_u8_norebase_v(CUDABackend())(v, b; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8[2, 3, 4, 5]
+    end
+
+    @testset "vstore view offset 1" begin
+        b = CUDA.zeros(UInt8, 16)
+        v = view(b, 2:16)
+        test_vstore_u8(CUDABackend())(v; ndrange=1)
+        synchronize(CUDABackend())
+        @test Array(b)[2:5] == UInt8[10, 20, 30, 40]
+    end
+
+    @testset "multiple threads rebase" begin
+        @kernel function test_vload_u8_multi(a, b)
+            I = @index(Global, Linear)
+            vals = KernelIntrinsics.vload(a, I, Val(4))
+            base = (I - 1) * 4
+            for i in 1:4
+                b[base+i] = vals[i]
+            end
+        end
+
+        a = CuArray{UInt8}(UInt8.(1:128))
+        b = CUDA.zeros(UInt8, 128)
+        test_vload_u8_multi(CUDABackend())(a, b; ndrange=32)
+        synchronize(CUDABackend())
+        @test Array(b) == UInt8.(1:128)
     end
 end

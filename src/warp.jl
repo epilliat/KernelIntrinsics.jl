@@ -1,7 +1,6 @@
 # Mainly based on CUDA.jl
 
-
-
+# --- Types ---
 
 """
     Direction
@@ -10,7 +9,7 @@ Abstract type representing warp shuffle directions.
 
 Subtypes:
 - [`Up`](@ref): Shuffle values from lower lane indices
-- [`Down`](@ref): Shuffle values from higher lane indices  
+- [`Down`](@ref): Shuffle values from higher lane indices
 - [`Xor`](@ref): Shuffle values using XOR of lane indices
 - [`Idx`](@ref): Shuffle values from a specific lane index
 """
@@ -24,7 +23,7 @@ Shuffle direction where each lane receives a value from a lane with a lower inde
 `@shfl(Up, val, offset)`: Lane `i` receives the value from lane `i - offset`.
 Lanes where `i < offset` keep their original value.
 
-Result for `offset=1`: `[1, 1, 2, 3, 4, ..., 31]`
+Result for `offset=1` (warpsize=32): `[1, 1, 2, 3, 4, ..., 31]`
 """
 struct Up <: Direction end
 
@@ -36,7 +35,7 @@ Shuffle direction where each lane receives a value from a lane with a higher ind
 `@shfl(Down, val, offset)`: Lane `i` receives the value from lane `i + offset`.
 Lanes where `i + offset >= warpsize` keep their original value.
 
-Result for `offset=1`: `[2, 3, 4, ..., 31, @warpsize, @warpsize]`
+Result for `offset=1` (warpsize=32): `[2, 3, 4, ..., 31, 32, 32]`
 """
 struct Down <: Direction end
 
@@ -58,7 +57,7 @@ struct Xor <: Direction end
 
 Shuffle direction where all lanes receive a value from a specific lane index.
 
-`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane`.
+`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane` (0-based).
 
 Useful for broadcasting a value from one lane to all others.
 """
@@ -101,12 +100,13 @@ struct Uni <: Mode end
 """
     Ballot <: Mode
 
-Vote mode that returns a UInt32 bitmask where bit `i` is set if lane `i`'s predicate is true.
+Vote mode that returns a `UInt32` bitmask where bit `i` (0-based) is set if lane `i`'s
+predicate is true.
 """
 struct Ballot <: Mode end
 
 
-
+# --- Implementation ---
 
 function _shfl end
 function _vote end
@@ -130,28 +130,17 @@ _shfl_recurse(op, x::Int16) = reinterpret(Int16, _shfl_recurse(op, reinterpret(U
 _shfl_recurse(op, x::Int64) = reinterpret(Int64, _shfl_recurse(op, reinterpret(UInt64, x)))
 _shfl_recurse(op, x::Int128) = reinterpret(Int128, _shfl_recurse(op, reinterpret(UInt128, x)))
 
-# floating point numbers
+# floating point
 _shfl_recurse(op, x::Float16) = reinterpret(Float16, _shfl_recurse(op, reinterpret(UInt16, x)))
 _shfl_recurse(op, x::Float64) = reinterpret(Float64, _shfl_recurse(op, reinterpret(UInt64, x)))
 
 _shfl_recurse(op, x::Bool) = op(UInt32(x)) % Bool
 
-
-#function _shfl_recurse(op, val::T)::T where {T}
-#    if isprimitivetype(T)
-#        return op(val)
-#    else
-#        return T(ntuple(i -> _shfl_recurse(op, getfield(val, i)), Val(fieldcount(T)))...)
-#    end
-#end
 @generated function _shfl_recurse(op, val::T) where {T}
     if isprimitivetype(T)
         return :(op(val))
     else
-        # Generate code for each field at compile time
-        field_exprs = [:(_shfl_recurse(op, getfield(val, $i)))
-                       for i in 1:fieldcount(T)]
-
+        field_exprs = [:(_shfl_recurse(op, getfield(val, $i))) for i in 1:fieldcount(T)]
         return quote
             T($(field_exprs...))
         end
@@ -160,42 +149,40 @@ end
 
 @generated function _shfl_recurse(op, val::NTuple{N,E}) where {N,E}
     if isprimitivetype(E)
-        # Direct shuffle of each element
         exprs = [:(op(val[$i])) for i in 1:N]
         return :(tuple($(exprs...)))
     else
-        # Recursive shuffle for complex element types
         exprs = [:(_shfl_recurse(op, val[$i])) for i in 1:N]
         return :(tuple($(exprs...)))
     end
 end
 
-
-
-
 """
-    @shfl(direction, val, src, [warpsize=@warpsize], [mask=0xffffffff])
+    @shfl(direction, val, src, [warpsize=@warpsize()], [mask=0xffffffff])
 
 Perform a warp shuffle operation, exchanging values between lanes within a warp.
+
+The default warpsize is retrieved at runtime via `@warpsize()`, which queries the backend
+(32 on CUDA, but may differ on future backends).
 
 # Arguments
 - `direction`: Shuffle direction ([`Up`](@ref), [`Down`](@ref), [`Xor`](@ref), or [`Idx`](@ref))
 - `val`: Value to shuffle (supports primitives, structs, and NTuples)
-- `src`: Offset (for Up/Down), XOR mask (for Xor), or source lane (for Idx)
-- `warpsize`: Warp size (default: @warpsize)
-- `mask`: Lane participation mask (default: 0xffffffff for all lanes)
+- `src`: Offset (for `Up`/`Down`), XOR mask (for `Xor`), or source lane 0-based index (for `Idx`)
+- `warpsize`: Warp size (default: `@warpsize()`)
+- `mask`: Lane participation mask (default: `0xffffffff` for all lanes)
 
 # Example
 ```julia
 @kernel function shfl_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
-    
-    shuffled = @shfl(Up, val, 1)      # Get value from lane below
-    shuffled = @shfl(Down, val, 1)    # Get value from lane above
-    shuffled = @shfl(Xor, val, 1)     # Swap with adjacent lane
-    shuffled = @shfl(Idx, val, 0)     # Broadcast lane 0 to all
-    
+
+    shuffled = @shfl(Up, val, 1)    # Lane i receives from lane i-1; lane 0 keeps its value
+    shuffled = @shfl(Down, val, 1)  # Lane i receives from lane i+1; last lane keeps its value
+    shuffled = @shfl(Xor, val, 1)   # Swap adjacent pairs (lane 0↔1, 2↔3, ...)
+    shuffled = @shfl(Idx, val, 0)   # Broadcast lane 0 to all lanes
+
     dst[I] = shuffled
 end
 ```
@@ -209,33 +196,36 @@ macro shfl(DirectType, val, src, ws=:(KernelIntrinsics._warpsize()), mask=0xffff
 end
 
 """
-    @warpreduce(val, lane, [op=+], [warpsize=@warpsize], [mask=0xffffffff])
+    @warpreduce(val, lane, [op=+], [warpsize=@warpsize()], [mask=0xffffffff])
 
-Perform an inclusive prefix scan (reduction) within a warp.
+Perform an inclusive prefix scan within a warp using shuffle-up operations.
 
-Each lane `i` accumulates values from lanes `1` to `i` using the specified operator.
-Uses shuffle-up operations internally.
+After this macro, lane `i` (1-based) holds the result of applying `op` to the values
+of lanes `1` through `i`. The result in the last lane is the warp-wide reduction.
+
+The default warpsize is retrieved at runtime via `@warpsize()`, which queries the backend
+(32 on CUDA, but may differ on future backends).
 
 # Arguments
-- `val`: Value to reduce (modified in-place)
+- `val`: Value to scan (modified in-place)
 - `lane`: Current lane index (1-based)
-- `op`: Binary reduction operator (default: `+`)
-- `warpsize`: Warp size (default: @warpsize)
-- `mask`: Lane participation mask (default: 0xffffffff)
+- `op`: Binary associative operator (default: `+`)
+- `warpsize`: Warp size (default: `@warpsize()`)
+- `mask`: Lane participation mask (default: `0xffffffff`)
 
 # Example
 ```julia
 @kernel function scan_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
-    lane = (I - 1) % @warpsize + 1
-    
-    @warpreduce(val, lane, +)
-    
-    dst[I] = val  # Contains prefix sum
+    lane = (I - 1) % @warpsize() + 1
+
+    @warpreduce(val, lane)
+
+    dst[I] = val
 end
 
-# Input:  [1, 2, 3, 4, ..., @warpsize]
+# Input:  [1, 2, 3, 4, ..., 32]
 # Output: [1, 3, 6, 10, ..., 528]
 ```
 
@@ -254,38 +244,38 @@ macro warpreduce(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xff
     end
 end
 
-
-
 """
-    @warpfold(val, lane, [op=+], [warpsize=32], [mask=0xffffffff])
+    @warpfold(val, lane, [op=+], [warpsize=@warpsize()], [mask=0xffffffff])
 
-Perform a warp-wide reduction, folding all values to a single result in lane 1.
+Perform a warp-wide reduction, combining all lane values using the specified operator.
+Uses shuffle-down operations internally. After this macro, all lanes hold the
+warp-wide result.
 
-Combines all values across the warp using the specified operator.
-Uses shuffle-down operations internally.
+The default warpsize is retrieved at runtime via `@warpsize()`, which queries the backend
+(32 on CUDA, but may differ on future backends).
 
 # Arguments
 - `val`: Value to reduce (modified in-place)
-- `lane`: Current lane index (1-based, unused but kept for API consistency)
-- `op`: Binary reduction operator (default: `+`)
-- `warpsize`: Warp size (default: 32)
-- `mask`: Lane participation mask (default: 0xffffffff)
+- `lane`: Current lane index (1-based; accepted for API consistency but unused)
+- `op`: Binary associative operator (default: `+`)
+- `warpsize`: Warp size (default: `@warpsize()`)
+- `mask`: Lane participation mask (default: `0xffffffff`)
 
 # Example
 ```julia
 @kernel function reduce_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
-    lane = (I - 1) % @warpsize + 1
-    
-    @warpfold(val, lane, +)
-    
+    lane = (I - 1) % @warpsize() + 1  # required by API, not used internally
+
+    @warpfold(val, lane)
+
     if lane == 1
-        dst[1] = val  # Contains sum of all @warpsize values
+        dst[1] = val  # Contains sum of all warp values
     end
 end
 
-# Input:  [1, 2, 3, ..., @warpsize]
+# Input:  [1, 2, 3, ..., 32]
 # Output: dst[1] = 528
 ```
 
@@ -302,29 +292,28 @@ macro warpfold(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xffff
     end
 end
 
-
 """
     @vote(mode, predicate, [mask=0xffffffff])
 
-Perform a warp vote operation, evaluating a predicate across all lanes.
+Perform a warp vote operation, evaluating a predicate across all participating lanes.
 
 # Arguments
 - `mode`: Vote mode ([`All`](@ref), [`AnyLane`](@ref), [`Uni`](@ref), or [`Ballot`](@ref))
 - `predicate`: Boolean predicate to evaluate
-- `mask`: Lane participation mask (default: 0xffffffff)
+- `mask`: Lane participation mask (default: `0xffffffff` for all lanes)
 
 # Example
 ```julia
 @kernel function vote_kernel(dst, src, threshold)
     I = @index(Global, Linear)
     val = src[I]
-    
-    all_above = @vote(All, val > threshold)     # True if all lanes above threshold
-    any_above = @vote(AnyLane, val > threshold) # True if any lane above threshold
-    uniform = @vote(Uni, val > threshold)       # True if all lanes have same result
-    mask = @vote(Ballot, val > threshold)       # Bitmask of which lanes are above
-    
-    dst[I] = mask
+
+    all_above = @vote(All,     val > threshold)  # true if all lanes satisfy predicate
+    any_above = @vote(AnyLane, val > threshold)  # true if any lane satisfies predicate
+    uniform   = @vote(Uni,     val > threshold)  # true if all lanes have the same result
+    bits      = @vote(Ballot,  val > threshold)  # UInt32 bitmask: bit i (0-based) set if lane i satisfies predicate
+
+    dst[I] = bits
 end
 ```
 

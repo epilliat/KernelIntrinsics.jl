@@ -297,3 +297,24 @@ expected = Int32[1; 1:31...]
         end
     end
 end
+
+@testset "warpreduce with defaults" begin
+    @kernel function test_warpreduce_defaults(dst, src)
+        I = @index(Global, Linear)
+        val = src[I]
+        lane = (I - 1) % 32 + 1
+
+        @warpreduce(val, lane, +)
+
+        dst[I] = val
+    end
+
+    src = CuArray{Int32}(1:32)
+    dst = CUDA.zeros(Int32, 32)
+    test_warpreduce_defaults(CUDABackend())(dst, src; ndrange=32)
+    synchronize(CUDABackend())
+
+    result = Array(dst)
+    expected = accumulate(+, 1:32)
+    @test result == Int32.(expected)
+end
