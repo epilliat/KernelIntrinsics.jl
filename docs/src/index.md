@@ -3,7 +3,6 @@
 > ⚠️ **Warning**: This package provides low-level GPU primitives intended for library developers, not end users. If you're looking for high-level GPU programming in Julia, use [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) or [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) directly. KernelIntrinsics.jl is similar in scope to [GPUArraysCore.jl](https://github.com/JuliaGPU/GPUArrays.jl) — a building block for other packages.
 
 > ⚠️ **Current Limitations**:
-> - No support for array views (`SubArray`) yet
 > - No bounds checking — out-of-bounds access will cause undefined behavior
 > - CUDA-only (other backends planned)
 
@@ -17,7 +16,7 @@ A Julia package providing low-level memory access primitives and warp-level oper
   - `@shfl`: Warp shuffle operations (Up, Down, Xor, Idx modes)
   - `@warpreduce`: Inclusive scan within a warp
   - `@warpfold`: Warp-wide reduction to a single value
-- **Vectorized Memory Operations**: Hardware-accelerated vector loads and stores with `vload`, `vstore!`, `vload_multi`, and `vstore_multi!`
+- **Vectorized Memory Operations**: Hardware-accelerated vector loads and stores with `vload`, `vstore!`, `vload_multi`, and `vstore_multi!`. Array views (`SubArray`) are supported and fall back to scalar tuple operations automatically.
 
 ## Cross-Architecture Support
 
@@ -61,6 +60,7 @@ example_kernel(CUDABackend())(X, Flag; ndrange=1)
 - Use the minimum required memory ordering (acquire/release over fences when possible)
 - Default warp size is 32; operations assume full warp participation with mask `0xffffffff`
 - `vload_multi`/`vstore_multi!` have a small runtime overhead for the alignment switch, but this is typically negligible compared to memory latency
+- `vload`/`vstore!` on array views fall back to scalar tuple operations; performance-critical code should prefer contiguous arrays for vectorized instructions
 
 ## Implementation Notes
 
@@ -74,13 +74,11 @@ The warp shuffle implementation builds upon [CUDA.jl](https://github.com/JuliaGP
 
 ### Vectorized Memory Access
 
-Vectorized loads and stores (`vload`, `vstore!`, `vload_multi`, `vstore_multi!`) use LLVM intrinsic functions to generate efficient vector instructions (`ld.global.v4`, `st.global.v4`).
+Vectorized loads and stores (`vload`, `vstore!`, `vload_multi`, `vstore_multi!`) use LLVM intrinsic functions to generate efficient vector instructions (`ld.global.v4`, `st.global.v4`) on contiguous arrays. Array views (`SubArray`) are fully supported via an automatic fallback to scalar tuple operations, ensuring correctness at the cost of vectorization.
 
 **Current limitations:**
-- Arrays must be contiguous in memory
-- Views (`SubArray`) are not supported
 - No bounds checking
-- Future versions may add fallback paths for non-contiguous access
+- Future versions may add vectorized support for non-contiguous views
 
 ## Requirements
 
