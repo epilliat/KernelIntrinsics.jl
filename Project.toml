@@ -10,13 +10,16 @@ KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
 
 [weakdeps]
+AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
 CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
 
 [extensions]
+KernelIntrinsicsAMDGPUExt = "AMDGPU"
 KernelIntrinsicsCUDAExt = "CUDA"
 
 [compat]
-CUDA = "5"
+AMDGPU = "1"
+CUDA = "5.9"
 GPUArrays = "11.4.0"
 GPUArraysCore = "0.2.0"
 KernelAbstractions = "0.9.38"

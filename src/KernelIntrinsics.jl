@@ -17,10 +17,12 @@ export @shfl, @warpreduce, @warpfold, @vote
 # Abstract type definitions for compile-time dispatch
 # ============================================================================
 
-function _warpsize end
+function get_warpsize end # outside kernels
+function _warpsize end # inside kernels
 
 
 include("helper.jl")
+include("device.jl")
 include("scopes_orderings.jl")
 include("vectorization.jl")
 include("warp.jl")
