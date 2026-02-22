@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · KernelIntrinsics.jl</title><meta name="title" content="Examples · KernelIntrinsics.jl"/><meta property="og:title" content="Examples · KernelIntrinsics.jl"/><meta property="twitter:title" content="Examples · KernelIntrinsics.jl"/><meta name="description" content="Documentation for KernelIntrinsics.jl."/><meta property="og:description" content="Documentation for KernelIntrinsics.jl."/><meta property="twitter:description" content="Documentation for KernelIntrinsics.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">KernelIntrinsics.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#Memory-Fences"><span>Memory Fences</span></a></li><li><a class="tocitem" href="#Ordered-Memory-Access"><span>Ordered Memory Access</span></a></li><li><a class="tocitem" href="#Warp-Operations"><span>Warp Operations</span></a></li><li><a class="tocitem" href="#Vectorized-Memory-Access"><span>Vectorized Memory Access</span></a></li><li><a class="tocitem" href="#Inspecting-Generated-Code"><span>Inspecting Generated Code</span></a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/epilliat/KernelIntrinsics.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/epilliat/KernelIntrinsics.jl/blob/main/docs/src/examples.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><h2 id="Memory-Fences"><a class="docs-heading-anchor" href="#Memory-Fences">Memory Fences</a><a id="Memory-Fences-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Fences" title="Permalink"></a></h2><p>Use <code>@fence</code> to ensure memory operations are visible across threads before proceeding:</p><pre><code class="language-julia hljs">using KernelIntrinsics
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · KernelIntrinsics.jl</title><meta name="title" content="Examples · KernelIntrinsics.jl"/><meta property="og:title" content="Examples · KernelIntrinsics.jl"/><meta property="twitter:title" content="Examples · KernelIntrinsics.jl"/><meta name="description" content="Documentation for KernelIntrinsics.jl."/><meta property="og:description" content="Documentation for KernelIntrinsics.jl."/><meta property="twitter:description" content="Documentation for KernelIntrinsics.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">KernelIntrinsics.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li><a class="tocitem" href="../api/">API Reference</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#Memory-Fences"><span>Memory Fences</span></a></li><li><a class="tocitem" href="#Ordered-Memory-Access"><span>Ordered Memory Access</span></a></li><li><a class="tocitem" href="#Warp-Operations"><span>Warp Operations</span></a></li><li><a class="tocitem" href="#Vectorized-Memory-Access"><span>Vectorized Memory Access</span></a></li><li><a class="tocitem" href="#Inspecting-Generated-Code"><span>Inspecting Generated Code</span></a></li></ul></li></ul><div class="docs-version-selector field has-addons visible"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"><option value="#" selected="selected">0.1.4</option></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/epilliat/KernelIntrinsics.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/epilliat/KernelIntrinsics.jl/blob/main/docs/src/examples.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><h2 id="Memory-Fences"><a class="docs-heading-anchor" href="#Memory-Fences">Memory Fences</a><a id="Memory-Fences-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Fences" title="Permalink"></a></h2><p>Use <code>@fence</code> to ensure memory operations are visible across threads before proceeding:</p><pre><code class="language-julia hljs">using KernelIntrinsics
 using KernelAbstractions, CUDA
 
 @kernel function fence_kernel(X, Flag)
@@ -15,11 +15,11 @@ fence_kernel(CUDABackend())(X, Flag; ndrange=1)</code></pre><p>The <code>@fence<
         X[1] = 10
         @access Flag[1] = 1  # Release store
     end
-    
+
     # Other threads wait for Flag[1] == 1
     while (@access Acquire Flag[1]) != 1  # Acquire load
     end
-    
+
     # Safely use X[1] here
 end
 
@@ -33,10 +33,10 @@ access_kernel(CUDABackend())(X, Flag; ndrange=1000)</code></pre><p>This generate
     dst[I] = shuffled_val
 end
 
-src = cu([i for i in 1:32])
-dst = cu([0 for i in 1:32])
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
 shfl_kernel(CUDABackend())(dst, src; ndrange=32)
-# dst = [1, 1, 2, 3, 4, ..., 31]</code></pre><h3 id="Shuffle-with-Custom-Types"><a class="docs-heading-anchor" href="#Shuffle-with-Custom-Types">Shuffle with Custom Types</a><a id="Shuffle-with-Custom-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Shuffle-with-Custom-Types" title="Permalink"></a></h3><p>Unlike CUDA.jl, KernelIntrinsics.jl supports shuffle operations on arbitrary user-defined bitstype structs, including nested and composite types:</p><pre><code class="language-julia hljs">struct Sub
+# dst = [1, 1, 2, 3, 4, ..., 31]</code></pre><h3 id="Shuffle-with-Custom-Types"><a class="docs-heading-anchor" href="#Shuffle-with-Custom-Types">Shuffle with Custom Types</a><a id="Shuffle-with-Custom-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Shuffle-with-Custom-Types" title="Permalink"></a></h3><p>Unlike CUDA.jl, KernelIntrinsics.jl supports shuffle operations on arbitrary user-defined bitstype structs, including nested and composite types, as well as <code>NTuple</code>s:</p><pre><code class="language-julia hljs">struct Sub
     a::Float16
     b::UInt8
 end
@@ -55,8 +55,14 @@ end
     dst[I] = shuffled_val
 end
 
+# Nested structs
 src = cu([ComplexType(i, Sub(i, i), i) for i in 1:32])
 dst = cu([ComplexType(0, Sub(0, 0), 0) for i in 1:32])
+shfl_custom_kernel(CUDABackend())(dst, src; ndrange=32)
+
+# NTuples
+src = cu([(Int32(i), Int32(i + 100)) for i in 1:32])
+dst = cu([(Int32(0), Int32(0)) for _ in 1:32])
 shfl_custom_kernel(CUDABackend())(dst, src; ndrange=32)</code></pre><h3 id="Warp-Reduce-(Inclusive-Scan)"><a class="docs-heading-anchor" href="#Warp-Reduce-(Inclusive-Scan)">Warp Reduce (Inclusive Scan)</a><a id="Warp-Reduce-(Inclusive-Scan)-1"></a><a class="docs-heading-anchor-permalink" href="#Warp-Reduce-(Inclusive-Scan)" title="Permalink"></a></h3><p>Perform inclusive prefix sum within a warp:</p><pre><code class="language-julia hljs">@kernel function warpreduce_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
@@ -65,8 +71,8 @@ shfl_custom_kernel(CUDABackend())(dst, src; ndrange=32)</code></pre><h3 id="Warp
     dst[I] = val
 end
 
-src = cu([i for i in 1:32])
-dst = cu([0 for i in 1:32])
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
 warpreduce_kernel(CUDABackend())(dst, src; ndrange=32)
 # dst = [1, 3, 6, 10, ..., 528]  (cumulative sum)</code></pre><h3 id="Warp-Fold-(Reduction)"><a class="docs-heading-anchor" href="#Warp-Fold-(Reduction)">Warp Fold (Reduction)</a><a id="Warp-Fold-(Reduction)-1"></a><a class="docs-heading-anchor-permalink" href="#Warp-Fold-(Reduction)" title="Permalink"></a></h3><p>Reduce all values in a warp to a single result:</p><pre><code class="language-julia hljs">@kernel function warpfold_kernel(dst, src)
     I = @index(Global, Linear)
@@ -76,18 +82,61 @@ warpreduce_kernel(CUDABackend())(dst, src; ndrange=32)
     dst[I] = val
 end
 
-src = cu([i for i in 1:32])
-dst = cu([0 for i in 1:32])
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
 warpfold_kernel(CUDABackend())(dst, src; ndrange=32)
-# dst[1] = 528 (sum of 1:32), rest are undefined</code></pre><h2 id="Vectorized-Memory-Access"><a class="docs-heading-anchor" href="#Vectorized-Memory-Access">Vectorized Memory Access</a><a id="Vectorized-Memory-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Vectorized-Memory-Access" title="Permalink"></a></h2><p>Use vectorized loads and stores for improved memory bandwidth:</p><pre><code class="language-julia hljs">@kernel function vectorized_kernel(dst, src)
-    values = vload(src, 2, Val(4))  # Load 4 elements starting at index 2
-    vstore!(dst, 2, values)         # Store 4 elements starting at index 2
+# dst[1] = 528 (sum of 1:32), rest are undefined</code></pre><h2 id="Vectorized-Memory-Access"><a class="docs-heading-anchor" href="#Vectorized-Memory-Access">Vectorized Memory Access</a><a id="Vectorized-Memory-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Vectorized-Memory-Access" title="Permalink"></a></h2><h3 id="Basic-Vectorized-Access"><a class="docs-heading-anchor" href="#Basic-Vectorized-Access">Basic Vectorized Access</a><a id="Basic-Vectorized-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Vectorized-Access" title="Permalink"></a></h3><p>Use <code>vload</code> and <code>vstore!</code> for aligned vectorized operations:</p><pre><code class="language-julia hljs">@kernel function vectorized_kernel(dst, src, i)
+    # Load 4 elements with rebase (i=2 → loads from index 5,6,7,8)
+    values = vload(src, i, Val(4), Val(true))
+
+    # Store 4 elements with rebase
+    vstore!(dst, i, values, Val(true))
 end
 
-src = cu([Int32(i) for i in 1:32])
-dst = cu([Int32(0) for i in 1:32])
-vectorized_kernel(CUDABackend())(dst, src; ndrange=1)
-# dst = [0, 0, 0, 0, 5, 6, 7, 8, 0, 0, ...]</code></pre><p>This generates efficient <code>ld.global.v4</code> and <code>st.global.v4</code> PTX instructions. The vector width depends on element type (v4 for Int32/Float32, v2 for Int64/Float64).</p><h2 id="Inspecting-Generated-Code"><a class="docs-heading-anchor" href="#Inspecting-Generated-Code">Inspecting Generated Code</a><a id="Inspecting-Generated-Code-1"></a><a class="docs-heading-anchor-permalink" href="#Inspecting-Generated-Code" title="Permalink"></a></h2><p>You can verify the generated PTX assembly to confirm proper instruction generation:</p><pre><code class="language-julia hljs">buf = IOBuffer()
-@device_code_ptx io = buf fence_kernel(CUDABackend())(X, Flag; ndrange=1)
-asm = String(take!(copy(buf)))
-occursin(&quot;fence.acq_rel.gpu&quot;, asm)  # true</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Thursday 22 January 2026 13:56">Thursday 22 January 2026</span>. Using Julia version 1.12.4.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
+vectorized_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[5:8] = [5, 6, 7, 8]</code></pre><p>This generates efficient <code>ld.global.v4</code> and <code>st.global.v4</code> PTX instructions. The vector width depends on element type (v4 for Int32/Float32, v2 for Int64/Float64).</p><h3 id="Dynamic-Alignment-with-vload_multi-/-vstore_multi!"><a class="docs-heading-anchor" href="#Dynamic-Alignment-with-vload_multi-/-vstore_multi!">Dynamic Alignment with <code>vload_multi</code> / <code>vstore_multi!</code></a><a id="Dynamic-Alignment-with-vload_multi-/-vstore_multi!-1"></a><a class="docs-heading-anchor-permalink" href="#Dynamic-Alignment-with-vload_multi-/-vstore_multi!" title="Permalink"></a></h3><p>When the starting index is not known at compile time, alignment cannot be guaranteed. <code>vload_multi</code> and <code>vstore_multi!</code> handle this by:</p><ol><li>Computing <code>mod = (i - 1) % N + 1</code> at runtime (where <code>N</code> is the vector width)</li><li>Using a switch table to dispatch to the appropriate statically-compiled function with <code>Val(mod)</code></li><li>Emitting a mix of vectorized instructions to maximize throughput</li></ol><pre><code class="language-julia hljs">@kernel function dynamic_load_kernel(dst, src, i, ::Val{N}) where {N}
+    # i can be any runtime value — alignment handled automatically
+    values = vload_multi(src, i, Val(N))
+    for j in 1:N
+        dst[j] = values[j]
+    end
+end
+
+src = cu(Int32.(1:100))
+dst = cu(zeros(Int32, 16))
+
+# Works for any starting index
+dynamic_load_kernel(CUDABackend())(dst, src, 7, Val(16); ndrange=1)
+# dst = [7, 8, 9, ..., 22]</code></pre><p>The generated PTX will contain a mix of <code>ld.global.v4</code>, <code>ld.global.v2</code>, and scalar loads depending on the runtime alignment, maximizing memory throughput while handling arbitrary offsets.</p><pre><code class="language-julia hljs">@kernel function dynamic_store_kernel(dst, i)
+    values = (Int32(10), Int32(20), Int32(30), Int32(40))
+    vstore_multi!(dst, i, values)
+end
+
+dst = cu(zeros(Int32, 100))
+dynamic_store_kernel(CUDABackend())(dst, 3; ndrange=1)
+# dst[3:6] = [10, 20, 30, 40]</code></pre><h3 id="Pattern-Based-Access"><a class="docs-heading-anchor" href="#Pattern-Based-Access">Pattern-Based Access</a><a id="Pattern-Based-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Pattern-Based-Access" title="Permalink"></a></h3><p>For custom access patterns, use <code>vload_pattern</code> and <code>vstore_pattern!</code>:</p><pre><code class="language-julia hljs">@kernel function pattern_kernel(dst, src, i)
+    # Pattern (1, 2, 1) means: load 1, then 2, then 1 element
+    values = vload_pattern(src, i, Val((1, 2, 1)))
+    vstore_pattern!(dst, i, values, Val((1, 2, 1)))
+end
+
+src = cu(Int32.(1:16))
+dst = cu(zeros(Int32, 16))
+pattern_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[2:5] = src[2:5]</code></pre><h2 id="Inspecting-Generated-Code"><a class="docs-heading-anchor" href="#Inspecting-Generated-Code">Inspecting Generated Code</a><a id="Inspecting-Generated-Code-1"></a><a class="docs-heading-anchor-permalink" href="#Inspecting-Generated-Code" title="Permalink"></a></h2><p>You can verify the generated PTX assembly to confirm proper instruction generation:</p><pre><code class="language-julia hljs">buf = IOBuffer()
+CUDA.@device_code_ptx io = buf fence_kernel(CUDABackend())(X, Flag; ndrange=1)
+asm = String(take!(buf))
+occursin(&quot;fence.acq_rel.gpu&quot;, asm)  # true</code></pre><p>Example: verifying vectorized instructions are generated:</p><pre><code class="language-julia hljs">@kernel function test_vload_kernel(a, b, i)
+    y = vload(a, i, Val(4))
+    b[1] = sum(y)
+end
+
+a = cu(Int32.(1:16))
+b = cu(zeros(Int32, 4))
+
+buf = IOBuffer()
+CUDA.@device_code_ptx io = buf test_vload_kernel(CUDABackend())(a, b, 2; ndrange=1)
+asm = String(take!(buf))
+occursin(&quot;ld.global.v4&quot;, asm)  # true</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 22 February 2026 13:35">Sunday 22 February 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
