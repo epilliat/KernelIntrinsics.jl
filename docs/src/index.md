@@ -1,12 +1,14 @@
 # KernelIntrinsics.jl
 
-> ⚠️ **Warning**: This package provides low-level GPU primitives intended for library developers, not end users. If you're looking for high-level GPU programming in Julia, use [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) or [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) directly. KernelIntrinsics.jl is similar in scope to [GPUArraysCore.jl](https://github.com/JuliaGPU/GPUArrays.jl) — a building block for other packages.
+!!! warning "Not affiliated with KernelAbstractions.jl"
+    Despite its name, this package is **not affiliated with or part of [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl)**. The name collision is a known issue. Currently, KernelIntrinsics.jl is primarily used as a building block for [KernelForge.jl](https://github.com/your-org/KernelForge.jl). A future goal is to upstream its functionality into KernelAbstractions.jl and [UnsafeAtomics.jl](https://github.com/JuliaConcurrent/UnsafeAtomics.jl).
 
-> ⚠️ **Current Limitations**:
-> - No bounds checking — out-of-bounds access will cause undefined behavior
-> - CUDA-only (other backends planned)
+!!! warning "Low-level library — not for end users"
+    This package provides low-level GPU primitives intended for library developers, not end users. If you're looking for high-level GPU programming in Julia, use [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) or [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) directly. KernelIntrinsics.jl is similar in scope to [GPUArraysCore.jl](https://github.com/JuliaGPU/GPUArrays.jl) — a building block for other packages.
 
-A Julia package providing low-level memory access primitives and warp-level operations for GPU programming with KernelAbstractions.jl. KernelIntrinsics.jl enables fine-grained control over memory ordering, synchronization, and vectorized operations for high-performance GPU kernels.
+!!! danger "Current Limitations"
+    - No bounds checking — out-of-bounds access will cause undefined behavior
+    - CUDA-only (other backends planned)
 
 ## Features
 
