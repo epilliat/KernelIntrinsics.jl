@@ -3,3 +3,4 @@ Manifest.toml
 docs/build
 *dev/
 *dev.jl
+*tmp.jl
