@@ -14,6 +14,7 @@ import KernelIntrinsics: _warpsize
 Base.Experimental.@overlay AMDGPU.method_table @inline function _warpsize()
     return AMDGPU.Device.wavefrontsize()
 end
+
 include("AMDGPU/device.jl")
 include("AMDGPU/scopes_ordering.jl")
 include("AMDGPU/shuffle_vote.jl")
