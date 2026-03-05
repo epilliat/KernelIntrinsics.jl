@@ -4,3 +4,4 @@ docs/build
 *dev/
 *dev.jl
 *tmp.jl
+*foo.jl
