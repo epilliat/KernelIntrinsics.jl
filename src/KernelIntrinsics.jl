@@ -6,7 +6,6 @@ export @warpsize
 
 export @fence, @access
 export vload, vstore!
-export vload_multi, vstore_multi!
 
 export @shfl, @warpreduce, @warpfold, @vote
 #export atomic_store, atomic_load, fence

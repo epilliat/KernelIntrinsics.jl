@@ -8,14 +8,11 @@ using KernelIntrinsics
 import KernelIntrinsics as KI
 using AMDGPU
 
+using BenchmarkTools
 
 using AMDGPU
 
-@kernel function trunc_test_kernel(dst, src)
-    I = @index(Global, Linear)
-    x = src[I]
-    dst[I] = x % UInt8  # should fail compilation
-end
+src = ROCArray{Float32}(undef, 10)
+@btime KI.device(src)
+@btime KI.get_warpsize(KI.device($src))
 
-# Force compilation to AMDGPU IR without a device
-AMDGPU.code_llvm(trunc_test_kernel(ROCBackend()), Tuple{ROCArray{UInt8,1},ROCArray{UInt32,1}})
