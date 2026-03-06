@@ -57,7 +57,7 @@ struct Xor <: Direction end
 
 Shuffle direction where all lanes receive a value from a specific lane index.
 
-`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane` (1-based).
+`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane` (0-based).
 
 Useful for broadcasting a value from one lane to all others.
 """
@@ -113,16 +113,16 @@ function _vote end
 
 for DirectType in (Up, Down, Xor, Idx)
     @eval begin
-        @inline _shfl(::Type{$DirectType}, mask, val, src, ::Val{ws}) where ws =
-            _shfl_recurse(x -> _shfl($DirectType, mask, x, src, Val{ws}()), val)
+        @inline _shfl(::Type{$DirectType}, mask, val, src) =
+            _shfl_recurse(x -> _shfl($DirectType, mask, x, src), val)
     end
 end
 
 # unsigned integers
-_shfl_recurse(op, x::UInt8) = unsafe_trunc(UInt8, op(UInt32(x)))
-_shfl_recurse(op, x::UInt16) = unsafe_trunc(UInt16, op(UInt32(x)))
-_shfl_recurse(op, x::UInt64) = (UInt64(op(unsafe_trunc(UInt32, x >>> 32))) << 32) | UInt64(op(unsafe_trunc(UInt32, x)))
-_shfl_recurse(op, x::UInt128) = (UInt128(op(unsafe_trunc(UInt64, x >>> 64))) << 64) | UInt128(op(unsafe_trunc(UInt64, x)))
+_shfl_recurse(op, x::UInt8) = op(UInt32(x)) % UInt8
+_shfl_recurse(op, x::UInt16) = op(UInt32(x)) % UInt16
+_shfl_recurse(op, x::UInt64) = (UInt64(op((x >>> 32) % UInt32)) << 32) | op((x & typemax(UInt32)) % UInt32)
+_shfl_recurse(op, x::UInt128) = (UInt128(op((x >>> 64) % UInt64)) << 64) | op((x & typemax(UInt64)) % UInt64)
 
 # signed integers
 _shfl_recurse(op, x::Int8) = reinterpret(Int8, _shfl_recurse(op, reinterpret(UInt8, x)))
@@ -134,7 +134,7 @@ _shfl_recurse(op, x::Int128) = reinterpret(Int128, _shfl_recurse(op, reinterpret
 _shfl_recurse(op, x::Float16) = reinterpret(Float16, _shfl_recurse(op, reinterpret(UInt16, x)))
 _shfl_recurse(op, x::Float64) = reinterpret(Float64, _shfl_recurse(op, reinterpret(UInt64, x)))
 
-_shfl_recurse(op, x::Bool) = unsafe_trunc(Bool, op(UInt32(x)))
+_shfl_recurse(op, x::Bool) = op(UInt32(x)) % Bool
 
 @generated function _shfl_recurse(op, val::T) where {T}
     if isprimitivetype(T)
@@ -168,7 +168,7 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
 # Arguments
 - `direction`: Shuffle direction ([`Up`](@ref), [`Down`](@ref), [`Xor`](@ref), or [`Idx`](@ref))
 - `val`: Value to shuffle (supports primitives, structs, and NTuples)
-- `src`: Offset (for `Up`/`Down`), XOR mask (for `Xor`), or source lane 1-based index (for `Idx`)
+- `src`: Offset (for `Up`/`Down`), XOR mask (for `Xor`), or source lane 0-based index (for `Idx`)
 - `warpsize`: Warp size (default: `@warpsize()`)
 - `mask`: Lane participation mask (default: `0xffffffff` for all lanes)
 
@@ -181,7 +181,7 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
     shuffled = @shfl(Up, val, 1)    # Lane i receives from lane i-1; lane 0 keeps its value
     shuffled = @shfl(Down, val, 1)  # Lane i receives from lane i+1; last lane keeps its value
     shuffled = @shfl(Xor, val, 1)   # Swap adjacent pairs (lane 0↔1, 2↔3, ...)
-    shuffled = @shfl(Idx, val, 1)   # Broadcast lane 1 to all lanes
+    shuffled = @shfl(Idx, val, 0)   # Broadcast lane 0 to all lanes
 
     dst[I] = shuffled
 end
@@ -189,9 +189,9 @@ end
 
 See also: [`@warpreduce`](@ref), [`@warpfold`](@ref)
 """
-macro shfl(DirectType, val, src, ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
+macro shfl(DirectType, val, src, mask=0xffffffff)
     return quote
-        _shfl($DirectType, $(esc(mask)), $(esc(val)), $(esc(src)), Val($(esc(ws))))
+        _shfl($DirectType, $(esc(mask)), $(esc(val)), $(esc(src)))
     end
 end
 
@@ -235,7 +235,7 @@ macro warpreduce(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xff
     quote
         local offset = 1
         while offset < $(esc(ws))
-            shuffled = @shfl(Up, $(esc(val)), offset, $(esc(ws)), $(esc(mask)))
+            shuffled = @shfl(Up, $(esc(val)), offset, $(esc(mask)))
             if $(esc(lane)) > offset
                 $(esc(val)) = $(esc(op))(shuffled, $(esc(val)))
             end

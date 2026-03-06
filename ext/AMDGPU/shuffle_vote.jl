@@ -9,16 +9,16 @@ import KernelIntrinsics: _shfl, _vote
 # delta/lane must be Int32; shfl_down additionally requires a Cuint width arg.
 for T in (Int32, UInt32, Float32)
     @eval begin
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Up}, mask, val::$T, delta, ::Val{ws}) where ws =
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Up}, mask, val::$T, delta) where ws =
             AMDGPU.Device.shfl_up(val, delta)
 
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Down}, mask, val::$T, delta, ::Val{ws}) where ws =
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Down}, mask, val::$T, delta) where ws =
             AMDGPU.Device.shfl_down(val, delta)
 
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Xor}, mask, val::$T, lane, ::Val{ws}) where ws =
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Xor}, mask, val::$T, lane) where ws =
             AMDGPU.Device.shfl_xor(val, lane)
 
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::$T, lane, ::Val{ws}) where ws =
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::$T, lane) where ws =
             AMDGPU.Device.shfl(val, lane - one(lane))
     end
 end

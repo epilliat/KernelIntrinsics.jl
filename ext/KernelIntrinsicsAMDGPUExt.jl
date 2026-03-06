@@ -11,6 +11,12 @@ using LLVM.Interop: @asmcall
 import KernelIntrinsics: _warpsize
 # Import parent module and types
 
+
+macro amdgpu_overlay(expr)
+    return :(Base.Experimental.@overlay AMDGPU.method_table $(esc(expr)))
+end
+
+
 Base.Experimental.@overlay AMDGPU.method_table @inline function _warpsize()
     return AMDGPU.Device.wavefrontsize()
 end

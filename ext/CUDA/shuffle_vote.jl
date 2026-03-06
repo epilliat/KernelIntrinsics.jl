@@ -3,7 +3,6 @@ import KernelIntrinsics: All, AnyLane, Uni, Ballot
 
 import KernelIntrinsics: _shfl, _vote
 
-
 const SHFL_DISPATCH = Dict(
     Up => :shfl_up_sync,
     Down => :shfl_down_sync,
@@ -14,8 +13,8 @@ const SHFL_DISPATCH = Dict(
 for T in (Int32, UInt32, Float32)
     for (direction, cuda_fname) in SHFL_DISPATCH
         @eval begin
-            CUDA.@device_override @inline _shfl(::Type{$direction}, mask, val::$T, src, ::Val{ws}) where ws =
-                $cuda_fname(mask, val, src, ws)
+            CUDA.@device_override @inline _shfl(::Type{$direction}, mask, val::$T, src) =
+                $cuda_fname(mask, val, src, _warpsize())
         end
     end
 end
