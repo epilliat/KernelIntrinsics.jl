@@ -2,7 +2,7 @@ module KernelIntrinsics
 
 using KernelAbstractions
 
-export @warpsize
+export @warpsize, @laneid
 
 export @fence, @access
 export vload, vstore!
@@ -20,12 +20,13 @@ function get_warpsize end # outside kernels
 function _warpsize end # inside kernels
 function _laneid end
 
+include("macros.jl")
 include("helper.jl")
+
 include("device.jl")
 include("scopes_orderings.jl")
 include("vectorization.jl")
 include("warp.jl")
-include("macros.jl")
 
 
 end # module KernelIntrinsics

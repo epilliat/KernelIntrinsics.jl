@@ -7,19 +7,22 @@ import KernelIntrinsics: _shfl, _vote
 # AMDGPU uses LLVM intrinsics via AMDGPU.Device.* (not top-level AMDGPU.*).
 # Note: no mask argument on AMD (wavefront uses hardware exec register).
 # delta/lane must be Int32; shfl_down additionally requires a Cuint width arg.
+
+const ROC_SHFL_DISPATCH = Dict(
+    Up => :shfl_up,
+    Down => :shfl_down,
+    Xor => :shfl_xor,
+    Idx => :shfl,
+)
+
 for T in (Int32, UInt32, Float32)
-    @eval begin
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Up}, mask, val::$T, delta) =
-            AMDGPU.Device.shfl_up(val, delta)
-
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Down}, mask, val::$T, delta) =
-            AMDGPU.Device.shfl_down(val, delta)
-
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Xor}, mask, val::$T, lane) =
-            AMDGPU.Device.shfl_xor(val, lane)
-
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::$T, lane) =
-            AMDGPU.Device.shfl(val, lane - one(lane))
+    for (direction, roc_fname) in ROC_SHFL_DISPATCH
+        @eval begin
+            Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::$T, src) =
+                AMDGPU.Device.$roc_fname(val, src)
+            #Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::$T, src, ::Val{ws}) where {ws} =
+            #    AMDGPU.Device.$roc_fname(val, src)
+        end
     end
 end
 
@@ -27,8 +30,6 @@ end
 # AMDGPU does not have Uni (uniform predicate vote) — approximated via all.
 # mask is ignored (AMD uses the hardware exec mask implicitly).
 # Note: AMDGPU.Device.ballot returns UInt64 (wavefront is 64 lanes on AMD).
-import AMDGPU.Device: ballot, activemask
-
 # Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{All}, mask, pred) =
 #     ballot(pred) == activemask()
 

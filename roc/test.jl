@@ -24,21 +24,15 @@ import AMDGPU.Device: ballot
 
 
 using KernelAbstractions
-using AMDGPU
-import AMDGPU.Device: ballot_sync, activemask
+using CUDA
 using KernelAbstractions
-using AMDGPU
 
-import AMDGPU.Device: ballot, activelane, wavefrontsize
 
 @kernel function test_vote_all!(out)
     i = @index(Local, Linear)
-    out[i] = @vote(All, true)
-end
-
-@kernel function test_vote_all!(out)
-    i = @index(Local, Linear)
-    out[i] = KI._vote(KernelIntrinsics.All, 0xffffffff, true)
+    lane = @laneid
+    #out[i] = KI._vote(KI.All, 0xffffffff, true)#KI._vote_all_from_shfl(true)#
+    out[i] = @vote(All, true)#KI._vote_all_from_shfl(true)#
 end
 
 @kernel function test_vote_all_false!(out)
@@ -56,15 +50,15 @@ end
     out[i] = @vote(AnyLane, i == 1)
 end
 
-backend = ROCBackend()
-out = ROCArray{Bool}(undef, 64)
+backend = CUDABackend()
+out = CuArray{Bool}(undef, 64)
 
 test_vote_all!(backend, 64)(out, ndrange=64)
-AMDGPU.synchronize()
+CUDA.synchronize()
 @show Array(out)[1]  # expected: true
 
 test_vote_all_false!(backend, 64)(out, ndrange=64)
-AMDGPU.synchronize()
+CUDA.synchronize()
 @show Array(out)[1]  # expected: false
 
 test_vote_any!(backend, 64)(out, ndrange=64)

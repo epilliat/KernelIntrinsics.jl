@@ -1,14 +1,20 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend selection
+# ─────────────────────────────────────────────────────────────────────────────
 using Pkg
-Pkg.activate("roc")
-using Revise
+include("meta_helpers.jl")
 
-using Test
-using KernelAbstractions
-using KernelIntrinsics
-using CUDA
-using AMDGPU
+TEST_BACKEND = get(ENV, "TEST_BACKEND") do
+    backend_str = has_cuda() ? "cuda" : has_roc() ? "roc" : "unknown"
+    @info "TEST_BACKEND not set, defaulting to $backend_str"
+    backend_str
+end
 
-## Helper function to count number of vectorize loads in asm
+
+#Pkg.activate("test/envs/$TEST_BACKEND")
+Pkg.activate("envs/$TEST_BACKEND") # when running tests
+Pkg.instantiate()
+
 
 function count_substring(haystack::AbstractString, needle::AbstractString)
     count = 0
@@ -22,13 +28,32 @@ function count_substring(haystack::AbstractString, needle::AbstractString)
     return count
 end
 
-## Tests 
 
-@testset "CUDA" begin
-    @testset "access and fence" begin
-        include("cuda/access_fences.jl")
-        include("cuda/shfl.jl")
-        include("cuda/vectorization_test.jl")
-        include("cuda/vectorization_custom_test.jl")
+using KernelIntrinsics
+import KernelIntrinsics as KI
+using KernelAbstractions
+import KernelAbstractions: synchronize, get_backend
+using Test
+
+
+if TEST_BACKEND == "cuda"
+    using CUDA
+    if !CUDA.functional()
+        @warn "No CUDA device found — skipping tests"
+        exit(0)
     end
+    AT = CuArray
+    backend = CUDABackend()
+    include("general_routine.jl")
+elseif TEST_BACKEND == "roc"
+    using AMDGPU
+    if !AMDGPU.functional()
+        @warn "No AMDGPU device found — skipping tests"
+        exit(0)
+    end
+    AT = ROCArray
+    backend = ROCBackend()
+    include("general_routine.jl")
+else
+    error("Unknown backend: $TEST_BACKEND")
 end

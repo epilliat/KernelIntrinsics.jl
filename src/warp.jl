@@ -196,7 +196,7 @@ macro shfl(DirectType, val, src, mask=0xffffffff)
 end
 
 """
-    @warpreduce(val, lane, [op=+], [warpsize=@warpsize()], [mask=0xffffffff])
+    @warpreduce(val, op, [lane=@laneid()], [warpsize=@warpsize()], [mask=0xffffffff])
 
 Perform an inclusive prefix scan within a warp using shuffle-up operations.
 
@@ -208,8 +208,8 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
 
 # Arguments
 - `val`: Value to scan (modified in-place)
-- `lane`: Current lane index (1-based)
 - `op`: Binary associative operator (default: `+`)
+- `lane`: Current lane index (1-based; default: `@laneid()`)
 - `warpsize`: Warp size (default: `@warpsize()`)
 - `mask`: Lane participation mask (default: `0xffffffff`)
 
@@ -218,9 +218,8 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
 @kernel function scan_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
-    lane = (I - 1) % @warpsize() + 1
 
-    @warpreduce(val, lane)
+    @warpreduce(val, +)
 
     dst[I] = val
 end
@@ -231,7 +230,7 @@ end
 
 See also: [`@warpfold`](@ref), [`@shfl`](@ref)
 """
-macro warpreduce(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
+macro warpreduce(val, op, lane=:(KernelIntrinsics._laneid()), ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
     quote
         local offset = 1
         while offset < $(esc(ws))
@@ -245,7 +244,7 @@ macro warpreduce(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xff
 end
 
 """
-    @warpfold(val, lane, [op=+], [warpsize=@warpsize()], [mask=0xffffffff])
+    @warpfold(val, op, [lane=@laneid()], [warpsize=@warpsize()], [mask=0xffffffff])
 
 Perform a warp-wide reduction, combining all lane values using the specified operator.
 Uses shuffle-down operations internally. After this macro, all lanes hold the
@@ -256,8 +255,8 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
 
 # Arguments
 - `val`: Value to reduce (modified in-place)
-- `lane`: Current lane index (1-based; accepted for API consistency but unused)
 - `op`: Binary associative operator (default: `+`)
+- `lane`: Current lane index (1-based; accepted for API consistency but unused; default: `@laneid()`)
 - `warpsize`: Warp size (default: `@warpsize()`)
 - `mask`: Lane participation mask (default: `0xffffffff`)
 
@@ -266,9 +265,9 @@ The default warpsize is retrieved at runtime via `@warpsize()`, which queries th
 @kernel function reduce_kernel(dst, src)
     I = @index(Global, Linear)
     val = src[I]
-    lane = (I - 1) % @warpsize() + 1  # required by API, not used internally
+    lane = (I - 1) % @warpsize() + 1
 
-    @warpfold(val, lane)
+    @warpfold(val, +)
 
     if lane == 1
         dst[1] = val  # Contains sum of all warp values
@@ -281,7 +280,7 @@ end
 
 See also: [`@warpreduce`](@ref), [`@shfl`](@ref)
 """
-macro warpfold(val, lane, op=:+, ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
+macro warpfold(val, op, lane=:(KernelIntrinsics._laneid()), ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
     quote
         local offset = 1
         while offset < $(esc(ws))
@@ -342,7 +341,7 @@ end
     # use UInt64 from the start so it works for both warpsize 32 and 64
     val = UInt64(pred) << (lane - 1)  # bit at lane position
 
-    @warpreduce(val, lane, |)   # lane ws holds full OR in lower ws bits
+    @warpreduce(val, |)   # lane ws holds full OR in lower ws bits
 
     # broadcast from last lane (0-based index = ws - 1)
     result = @shfl(Idx, val, ws)
@@ -354,9 +353,9 @@ end
     lane = @laneid()
     ws = @warpsize()
 
-    @warpfold(pred, lane, &)  # all lanes AND together
+    @warpfold(pred, &)  # all lanes AND together
 
-    result = @shfl(Idx, pred, ws)
+    result = @shfl(Idx, pred, 1)
     return result
 end
 
@@ -364,9 +363,8 @@ end
     lane = @laneid()
     ws = @warpsize()
 
-    @warpfold(pred, lane, |)  # any lane OR together
+    @warpfold(pred, |)  # any lane OR together
 
-    result = @shfl(Idx, val, 1)
+    result = @shfl(Idx, pred, 1)
     return result != UInt32(0)
 end
-
