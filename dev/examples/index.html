@@ -83,47 +83,26 @@ end
 src = cu(Int32.(1:32))
 dst = cu(zeros(Int32, 32))
 warpfold_kernel(CUDABackend())(dst, src; ndrange=32)
-# dst[1] = 528 (sum of 1:32), rest are undefined</code></pre><h2 id="Vectorized-Memory-Access"><a class="docs-heading-anchor" href="#Vectorized-Memory-Access">Vectorized Memory Access</a><a id="Vectorized-Memory-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Vectorized-Memory-Access" title="Permalink"></a></h2><h3 id="Basic-Vectorized-Access"><a class="docs-heading-anchor" href="#Basic-Vectorized-Access">Basic Vectorized Access</a><a id="Basic-Vectorized-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Vectorized-Access" title="Permalink"></a></h3><p>Use <code>vload</code> and <code>vstore!</code> for aligned vectorized operations:</p><pre><code class="language-julia hljs">@kernel function vectorized_kernel(dst, src, i)
-    # Load 4 elements with rebase (i=2 → loads from index 5,6,7,8)
-    values = vload(src, i, Val(4), Val(true))
-
-    # Store 4 elements with rebase
-    vstore!(dst, i, values, Val(true))
+# dst[1] = 528 (sum of 1:32), rest are undefined</code></pre><h2 id="Vectorized-Memory-Access"><a class="docs-heading-anchor" href="#Vectorized-Memory-Access">Vectorized Memory Access</a><a id="Vectorized-Memory-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Vectorized-Memory-Access" title="Permalink"></a></h2><p><code>vload</code> and <code>vstore!</code> issue hardware vector loads/stores when the underlying pointer is suitably aligned. The vector width depends on element type — <code>v4</code> for 32-bit (Int32/Float32), <code>v2</code> for 64-bit (Int64/Float64).</p><h3 id="Rebased-indexing-—-block-of-Nitem-(default)"><a class="docs-heading-anchor" href="#Rebased-indexing-—-block-of-Nitem-(default)">Rebased indexing — block-of-<code>Nitem</code> (default)</a><a id="Rebased-indexing-—-block-of-Nitem-(default)-1"></a><a class="docs-heading-anchor-permalink" href="#Rebased-indexing-—-block-of-Nitem-(default)" title="Permalink"></a></h3><p>In the default mode, <code>idx</code> is a <strong>1-based block index</strong>: <code>vload(A, i, Val(N))</code> loads the <code>i</code>-th contiguous block of <code>N</code> elements, i.e. <code>A[(i-1)*N+1 : i*N]</code>. This is the natural form when each thread owns a fixed-size tile of the array.</p><pre><code class="language-julia hljs">@kernel function rebased_kernel(dst, src, i)
+    # i = 2, Nitem = 4 → loads block 2, i.e. elements 5,6,7,8
+    values = vload(src, i, Val(4))
+    vstore!(dst, i, values)            # writes back to elements 5,6,7,8
 end
 
 src = cu(Int32.(1:32))
 dst = cu(zeros(Int32, 32))
-vectorized_kernel(CUDABackend())(dst, src, 2; ndrange=1)
-# dst[5:8] = [5, 6, 7, 8]</code></pre><p>This generates efficient <code>ld.global.v4</code> and <code>st.global.v4</code> PTX instructions. The vector width depends on element type (v4 for Int32/Float32, v2 for Int64/Float64).</p><h3 id="Dynamic-Alignment-with-vload_multi-/-vstore_multi!"><a class="docs-heading-anchor" href="#Dynamic-Alignment-with-vload_multi-/-vstore_multi!">Dynamic Alignment with <code>vload_multi</code> / <code>vstore_multi!</code></a><a id="Dynamic-Alignment-with-vload_multi-/-vstore_multi!-1"></a><a class="docs-heading-anchor-permalink" href="#Dynamic-Alignment-with-vload_multi-/-vstore_multi!" title="Permalink"></a></h3><p>When the starting index is not known at compile time, alignment cannot be guaranteed. <code>vload_multi</code> and <code>vstore_multi!</code> handle this by:</p><ol><li>Computing <code>mod = (i - 1) % N + 1</code> at runtime (where <code>N</code> is the vector width)</li><li>Using a switch table to dispatch to the appropriate statically-compiled function with <code>Val(mod)</code></li><li>Emitting a mix of vectorized instructions to maximize throughput</li></ol><pre><code class="language-julia hljs">@kernel function dynamic_load_kernel(dst, src, i, ::Val{N}) where {N}
-    # i can be any runtime value — alignment handled automatically
-    values = vload_multi(src, i, Val(N))
-    for j in 1:N
-        dst[j] = values[j]
-    end
+rebased_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[5:8] == [5, 6, 7, 8]</code></pre><p>When the array&#39;s base pointer is <code>Nitem</code>-aligned (the common case for top-level GPU allocations), this lowers to a single <code>ld.global.v4</code> / <code>st.global.v4</code>. Otherwise alignment is resolved internally without user intervention.</p><h3 id="Direct-indexing-—-start-at-exactly-idx"><a class="docs-heading-anchor" href="#Direct-indexing-—-start-at-exactly-idx">Direct indexing — start at exactly <code>idx</code></a><a id="Direct-indexing-—-start-at-exactly-idx-1"></a><a class="docs-heading-anchor-permalink" href="#Direct-indexing-—-start-at-exactly-idx" title="Permalink"></a></h3><p>Pass <code>Val(false)</code> as the fourth argument to load the literal range <code>A[idx : idx+N-1]</code>. Use this when the starting position is data-dependent and not necessarily a multiple of <code>N</code>.</p><pre><code class="language-julia hljs">@kernel function direct_kernel(dst, src, i)
+    # i = 2, Nitem = 4 → loads elements 2,3,4,5 (no rebase)
+    values = vload(src, i, Val(4), Val(false))
+    vstore!(dst, i, values, Val(false))
 end
 
-src = cu(Int32.(1:100))
-dst = cu(zeros(Int32, 16))
-
-# Works for any starting index
-dynamic_load_kernel(CUDABackend())(dst, src, 7, Val(16); ndrange=1)
-# dst = [7, 8, 9, ..., 22]</code></pre><p>The generated PTX will contain a mix of <code>ld.global.v4</code>, <code>ld.global.v2</code>, and scalar loads depending on the runtime alignment, maximizing memory throughput while handling arbitrary offsets.</p><pre><code class="language-julia hljs">@kernel function dynamic_store_kernel(dst, i)
-    values = (Int32(10), Int32(20), Int32(30), Int32(40))
-    vstore_multi!(dst, i, values)
-end
-
-dst = cu(zeros(Int32, 100))
-dynamic_store_kernel(CUDABackend())(dst, 3; ndrange=1)
-# dst[3:6] = [10, 20, 30, 40]</code></pre><h3 id="Pattern-Based-Access"><a class="docs-heading-anchor" href="#Pattern-Based-Access">Pattern-Based Access</a><a id="Pattern-Based-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Pattern-Based-Access" title="Permalink"></a></h3><p>For custom access patterns, use <code>vload_pattern</code> and <code>vstore_pattern!</code>:</p><pre><code class="language-julia hljs">@kernel function pattern_kernel(dst, src, i)
-    # Pattern (1, 2, 1) means: load 1, then 2, then 1 element
-    values = vload_pattern(src, i, Val((1, 2, 1)))
-    vstore_pattern!(dst, i, values, Val((1, 2, 1)))
-end
-
-src = cu(Int32.(1:16))
-dst = cu(zeros(Int32, 16))
-pattern_kernel(CUDABackend())(dst, src, 2; ndrange=1)
-# dst[2:5] = src[2:5]</code></pre><h2 id="Inspecting-Generated-Code"><a class="docs-heading-anchor" href="#Inspecting-Generated-Code">Inspecting Generated Code</a><a id="Inspecting-Generated-Code-1"></a><a class="docs-heading-anchor-permalink" href="#Inspecting-Generated-Code" title="Permalink"></a></h2><p>You can verify the generated PTX assembly to confirm proper instruction generation:</p><pre><code class="language-julia hljs">buf = IOBuffer()
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
+direct_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[2:5] == [2, 3, 4, 5]</code></pre><p>Direct indexing always goes through the runtime-aligned dispatch path (a mix of <code>ld.global.v4</code>, <code>ld.global.v2</code>, and scalar loads chosen by the actual offset), so it is correct for any <code>i</code> but slightly less aggressive than the aligned rebased fast path.</p><h3 id="Statically-known-alignment"><a class="docs-heading-anchor" href="#Statically-known-alignment">Statically known alignment</a><a id="Statically-known-alignment-1"></a><a class="docs-heading-anchor-permalink" href="#Statically-known-alignment" title="Permalink"></a></h3><p>If the alignment of the slice you load from is known at compile time, pass it as the fifth argument (<code>Val(k)</code> with <code>1 ≤ k ≤ Nitem</code>) to avoid the runtime check. <code>Val(1)</code> means &quot;fully aligned&quot;; <code>Val(k&gt;1)</code> means &quot;misaligned by <code>k</code>-elements&quot; and emits a fixed pattern of vector + scalar instructions.</p><pre><code class="language-julia hljs">v = view(cu(Int32.(1:32)), 2:32)       # offset by 1 → known misalignment 2
+values = vload(v, 1, Val(4), Val(true), Val(2))   # static (1,2,1) pattern, no branch</code></pre><h2 id="Inspecting-Generated-Code"><a class="docs-heading-anchor" href="#Inspecting-Generated-Code">Inspecting Generated Code</a><a id="Inspecting-Generated-Code-1"></a><a class="docs-heading-anchor-permalink" href="#Inspecting-Generated-Code" title="Permalink"></a></h2><p>You can verify the generated PTX assembly to confirm proper instruction generation:</p><pre><code class="language-julia hljs">buf = IOBuffer()
 CUDA.@device_code_ptx io = buf fence_kernel(CUDABackend())(X, Flag; ndrange=1)
 asm = String(take!(buf))
 occursin(&quot;fence.acq_rel.gpu&quot;, asm)  # true</code></pre><p>Example: verifying vectorized instructions are generated:</p><pre><code class="language-julia hljs">@kernel function test_vload_kernel(a, b, i)
@@ -137,4 +116,4 @@ b = cu(zeros(Int32, 4))
 buf = IOBuffer()
 CUDA.@device_code_ptx io = buf test_vload_kernel(CUDABackend())(a, b, 2; ndrange=1)
 asm = String(take!(buf))
-occursin(&quot;ld.global.v4&quot;, asm)  # true</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 6 May 2026 19:04">Wednesday 6 May 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+occursin(&quot;ld.global.v4&quot;, asm)  # true</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../api/">« API Reference</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 6 May 2026 21:01">Wednesday 6 May 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
