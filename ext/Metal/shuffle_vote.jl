@@ -7,7 +7,7 @@ const SHFL_DISPATCH = Dict(
     Down => :(Metal.simd_shuffle_down)
 )
 
-for T in (:Float32, :Int32, :UInt32, :Float16, :Int16, :UInt16)
+for T in (:Float32, :Int32, :UInt32)
     for (direction, metal_fname) in SHFL_DISPATCH
         @eval begin
             Base.Experimental.@overlay Metal.method_table @inline _shfl(::Type{$direction}, mask, val::$T, src) =
@@ -21,13 +21,8 @@ end
 # Will update when they are part of official release
 # =======================================================================================================
 simd_shuffle_map = ((Float32, "f32"),
-                    (Float16, "f16"),
                     (Int32,   "s.i32"),
-                    (UInt32,  "u.i32"),
-                    (Int16,   "s.i16"),
-                    (UInt16,  "u.i16"),
-                    (Int8,    "s.i8"),
-                    (UInt8,   "u.i8"))
+                    (UInt32,  "u.i32"))
 
 for (jltype, suffix) in simd_shuffle_map
     @eval begin

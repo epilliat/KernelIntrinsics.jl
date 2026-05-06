@@ -10,6 +10,12 @@ struct ComplexType
     z::Float64
 end
 
+struct ComplexTypeMetal
+    x::Int32
+    y::SubType
+    z::Float16
+end
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -126,7 +132,18 @@ end
             end
         end
 
-        if TEST_BACKEND != "metal"
+        if TEST_BACKEND == "metal"
+            @testset "Up ComplexTypeMetal" begin
+                src = to_device([ComplexTypeMetal(i, SubType(Float16(i), UInt8(i)), Float16(i)) for i in 1:warpsz])
+                dst = to_device([ComplexTypeMetal(0, SubType(Float16(0), UInt8(0)),Float16(0.0)) for _ in 1:warpsz])
+                launch(shfl_up_kernel, dst, src, 1; ndrange=warpsz)
+                result = from_device(dst)
+                @test result[1] == ComplexTypeMetal(1, SubType(Float16(1), UInt8(1)), Float16(1.0))
+                for i in 2:warpsz
+                    @test result[i] == ComplexTypeMetal(i - 1, SubType(Float16(i - 1), UInt8(i - 1)), Float16(i - 1))
+                end
+            end
+        else
             @testset "Up ComplexType" begin
                 src = to_device([ComplexType(i, SubType(Float16(i), UInt8(i)), Float64(i)) for i in 1:warpsz])
                 dst = to_device([ComplexType(0, SubType(Float16(0), UInt8(0)), 0.0) for _ in 1:warpsz])
