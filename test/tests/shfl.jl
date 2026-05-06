@@ -16,22 +16,7 @@ struct ComplexTypeMetal
     z::Float16
 end
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Wrap host array into the target device array type
-to_device(x) = AT(x)
-
-# Retrieve results back to host
-from_device(x) = Array(x)
-warpsz = KI.get_warpsize(KI.device(backend, 1))
-
-
-function launch(kernel, args...; ndrange)
-    kernel(backend)(args...; ndrange=ndrange)
-    synchronize(backend)
-end
+# Helpers (to_device, from_device, launch, warpsz) come from test/harness.jl.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests
@@ -101,7 +86,7 @@ end
             @test from_device(dst) == Float32[1.0; 1:warpsz-1...]
         end
 
-        if TEST_BACKEND != "metal"
+        if HOOKS.supported.float64
             @testset "Up Float64" begin
                 src = to_device(Float64.(1:warpsz))
                 dst = to_device(zeros(Float64, warpsz))
@@ -132,18 +117,9 @@ end
             end
         end
 
-        if TEST_BACKEND == "metal"
-            @testset "Up ComplexTypeMetal" begin
-                src = to_device([ComplexTypeMetal(i, SubType(Float16(i), UInt8(i)), Float16(i)) for i in 1:warpsz])
-                dst = to_device([ComplexTypeMetal(0, SubType(Float16(0), UInt8(0)),Float16(0.0)) for _ in 1:warpsz])
-                launch(shfl_up_kernel, dst, src, 1; ndrange=warpsz)
-                result = from_device(dst)
-                @test result[1] == ComplexTypeMetal(1, SubType(Float16(1), UInt8(1)), Float16(1.0))
-                for i in 2:warpsz
-                    @test result[i] == ComplexTypeMetal(i - 1, SubType(Float16(i - 1), UInt8(i - 1)), Float16(i - 1))
-                end
-            end
-        else
+        # ComplexType has a Float64 leaf — fall back to ComplexTypeMetal
+        # (Float16 leaf) on backends without Float64 support.
+        if HOOKS.supported.float64
             @testset "Up ComplexType" begin
                 src = to_device([ComplexType(i, SubType(Float16(i), UInt8(i)), Float64(i)) for i in 1:warpsz])
                 dst = to_device([ComplexType(0, SubType(Float16(0), UInt8(0)), 0.0) for _ in 1:warpsz])
@@ -152,6 +128,17 @@ end
                 @test result[1] == ComplexType(1, SubType(Float16(1), UInt8(1)), 1.0)
                 for i in 2:warpsz
                     @test result[i] == ComplexType(i - 1, SubType(Float16(i - 1), UInt8(i - 1)), Float64(i - 1))
+                end
+            end
+        else
+            @testset "Up ComplexTypeMetal" begin
+                src = to_device([ComplexTypeMetal(i, SubType(Float16(i), UInt8(i)), Float16(i)) for i in 1:warpsz])
+                dst = to_device([ComplexTypeMetal(0, SubType(Float16(0), UInt8(0)), Float16(0.0)) for _ in 1:warpsz])
+                launch(shfl_up_kernel, dst, src, 1; ndrange=warpsz)
+                result = from_device(dst)
+                @test result[1] == ComplexTypeMetal(1, SubType(Float16(1), UInt8(1)), Float16(1.0))
+                for i in 2:warpsz
+                    @test result[i] == ComplexTypeMetal(i - 1, SubType(Float16(i - 1), UInt8(i - 1)), Float16(i - 1))
                 end
             end
         end
@@ -250,12 +237,18 @@ end
             @test all(from_device(dst))
         end
 
-        # @testset "Ballot — all bits set when all lanes satisfy predicate" begin
-        #     src = to_device(fill(Int32(10), warpsz))
-        #     dst = to_device(zeros(UInt64, warpsz))
-        #     launch(kernel_vote_ballot, dst, src, Int32(5); ndrange=warpsz)
-        #     @test all(from_device(dst) .== typemax(UInt64))
-        # end
+        if HOOKS.supported.vote_ballot
+            @testset "Ballot — bits set for participating lanes" begin
+                src = to_device(fill(Int32(10), warpsz))
+                dst = to_device(zeros(UInt64, warpsz))
+                launch(kernel_vote_ballot, dst, src, Int32(5); ndrange=warpsz)
+                # All `warpsz` lanes participate → low-order `warpsz` bits set.
+                # Width of the ballot itself differs per backend (UInt32 on CUDA,
+                # UInt64 on Metal); both are stored into a UInt64 destination.
+                expected = (UInt64(1) << warpsz) - 1
+                @test all(from_device(dst) .== expected)
+            end
+        end
 
     end  # @vote
 
