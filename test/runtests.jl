@@ -2,31 +2,23 @@
 # Backend selection
 # ─────────────────────────────────────────────────────────────────────────────
 using Pkg
-include("meta_helpers.jl")
+
+# Pre-env probes: must work before any backend Pkg is loaded. The runtime check
+# (CUDA.functional() / AMDGPU.functional() / Metal.functional()) below is the
+# authoritative one — these probes are only used to pick a default backend when
+# TEST_BACKEND is unset.
+_has_cuda()  = Sys.which("nvidia-smi") !== nothing
+_has_roc()   = Sys.which("rocm-smi")   !== nothing
+_has_metal() = Sys.isapple()
 
 TEST_BACKEND = get(ENV, "TEST_BACKEND") do
-    backend_str = has_cuda() ? "cuda" : has_roc() ? "roc" : has_metal() ? "metal" : "unknown"
+    backend_str = _has_cuda() ? "cuda" : _has_roc() ? "roc" : _has_metal() ? "metal" : "unknown"
     @info "TEST_BACKEND not set, defaulting to $backend_str"
     backend_str
 end
 
-
-Pkg.activate("test/envs/$TEST_BACKEND")
-Pkg.activate("envs/$TEST_BACKEND") # when running tests
+Pkg.activate(joinpath(@__DIR__, "envs", TEST_BACKEND))
 Pkg.instantiate()
-
-
-function count_substring(haystack::AbstractString, needle::AbstractString)
-    count = 0
-    start = 1
-    while true
-        r = findnext(needle, haystack, start)
-        r === nothing && break
-        count += 1
-        start = last(r) + 1
-    end
-    return count
-end
 
 
 using KernelIntrinsics
