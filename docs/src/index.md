@@ -1,14 +1,14 @@
 # KernelIntrinsics.jl
 
 !!! warning "Not affiliated with submodule KernelIntrinsics of KernelAbstractions.jl"
-    Despite its name, this package is **not affiliated with or part of [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl)**. The name collision is a known issue. Currently, KernelIntrinsics.jl is primarily used as a building block for [KernelForge.jl](https://github.com/your-org/KernelForge.jl). A future goal is to upstream its functionality into KernelAbstractions.jl and [UnsafeAtomics.jl](https://github.com/JuliaConcurrent/UnsafeAtomics.jl).
+    Despite its name, this package is **not affiliated with or part of [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl)**. The name collision is a known issue. A future goal is to upstream its functionality into KernelAbstractions.jl and [UnsafeAtomics.jl](https://github.com/JuliaConcurrent/UnsafeAtomics.jl).
 
 !!! warning "Low-level library — not for end users"
     This package provides low-level GPU primitives intended for library developers, not end users. If you're looking for high-level GPU programming in Julia, use [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) or [KernelAbstractions.jl](https://github.com/JuliaGPU/KernelAbstractions.jl) directly. KernelIntrinsics.jl is similar in scope to [GPUArraysCore.jl](https://github.com/JuliaGPU/GPUArrays.jl) — a building block for other packages.
 
 !!! danger "Current Limitations"
     - No bounds checking for `vload`/`vstore!` on dense arrays — out-of-bounds access will cause undefined behavior
-    - CUDA and ROCm backends supported; other backends planned
+    - CUDA, ROCm, and Metal backends supported; oneAPI planned
 
 ## Features
 
@@ -18,13 +18,17 @@
   - `@shfl`: Warp shuffle operations (Up, Down, Xor, Idx modes)
   - `@warpreduce`: Inclusive scan within a warp
   - `@warpfold`: Warp-wide reduction to a single value
-- **Vectorized Memory Operations**: Hardware-accelerated vector loads and stores with `vload`, `vstore!`, `vload_multi`, and `vstore_multi!`. Array views (`SubArray`) are supported and fall back to scalar tuple operations automatically.
+- **Vectorized Memory Operations**: Hardware-accelerated vector loads and stores with `vload` and `vstore!`. Two indexing modes are available: *rebased* (default) where `idx` selects a contiguous block of `Nitem` elements (`(idx-1)*Nitem+1 … idx*Nitem`), and *direct* where `idx` is the literal starting index. Array views (`SubArray`) are supported and fall back to scalar tuple operations automatically.
 
 ## Cross-Architecture Support
 
-KernelIntrinsics.jl currently supports CUDA GPUs via the `CUDABackend` and AMD GPUs via the `ROCBackend`. The CUDA backend leverages PTX instructions for memory fences (`fence.acq_rel.gpu`), ordered memory access (`ld.acquire.gpu`, `st.release.gpu`), warp shuffle operations, and vectorized memory transactions. The ROCm backend provides equivalent primitives using AMDGPU-specific intrinsics.
+KernelIntrinsics.jl currently supports three backends:
 
-The macro-based API is designed with portability in mind. Future releases may extend support to additional GPU backends (Intel oneAPI, Apple Metal). Contributions to enable further cross-platform support are welcome.
+- **CUDA** via `CUDABackend` — PTX instructions for fences (`fence.acq_rel.gpu`), ordered access (`ld.acquire.gpu`, `st.release.gpu`), warp shuffles, and vectorized loads/stores.
+- **ROCm** via `ROCBackend` — equivalent primitives using AMDGPU-specific intrinsics.
+- **Metal** via `MetalBackend` — Apple GPU support contributed by [@WilliBee](https://github.com/WilliBee) (PR [#5](https://github.com/epilliat/KernelIntrinsics.jl/pull/5)). Maps to AIR intrinsics (`air.atomic.fence`, `air.simd_*`); subject to Metal's narrower atomic type set (`Int32`/`UInt32`/`Float32`).
+
+The macro-based API is designed with portability in mind. Future releases may extend support to additional GPU backends (Intel oneAPI). Contributions are welcome.
 
 ## Installation
 ```julia
@@ -61,7 +65,7 @@ example_kernel(CUDABackend())(X, Flag; ndrange=1)
 - Vectorized operations can significantly improve memory bandwidth utilization
 - Use the minimum required memory ordering (acquire/release over fences when possible)
 - Default warp size is 32 for CUDA and 64 for ROCm; operations assume full warp/wavefront participation
-- `vload_multi`/`vstore_multi!` have a small runtime overhead for the alignment switch, but this is typically negligible compared to memory latency
+- When `vload`/`vstore!` cannot prove pointer alignment at compile time, they emit a small runtime alignment dispatch — negligible compared to memory latency, but providing the `Alignment` argument removes it
 - `vload`/`vstore!` on array views fall back to scalar tuple operations; performance-critical code should prefer contiguous arrays for vectorized instructions
 
 ## Implementation Notes
@@ -76,7 +80,12 @@ The warp shuffle implementation builds upon [CUDA.jl](https://github.com/JuliaGP
 
 ### Vectorized Memory Access
 
-Vectorized loads and stores (`vload`, `vstore!`, `vload_multi`, `vstore_multi!`) use LLVM intrinsic functions to generate efficient vector instructions (`ld.global.v4`, `st.global.v4` on CUDA, and their ROCm equivalents) on contiguous arrays. Array views (`SubArray`) are fully supported via an automatic fallback to scalar tuple operations, ensuring correctness at the cost of vectorization.
+Vectorized loads and stores (`vload`, `vstore!`) use LLVM intrinsic functions to generate efficient vector instructions (`ld.global.v4`, `st.global.v4` on CUDA, and their ROCm/Metal equivalents) on contiguous arrays. Two indexing modes are provided:
+
+- **Rebased** (`Val(true)`, default): `idx` is a *block index* — `vload(A, i, Val(N))` loads `A[(i-1)*N+1 : i*N]`. This is the form to reach for when you tile data into fixed-size blocks per thread; when the array's base pointer is `N`-aligned, it lowers to a single aligned vector load.
+- **Direct** (`Val(false)`): `idx` is the literal starting index — `vload(A, i, Val(N), Val(false))` loads `A[i : i+N-1]`. Use this when the start position is data-dependent and not a multiple of `N`.
+
+Both modes handle unknown alignment at runtime via an internal pattern-based dispatch, so correctness is preserved without the user managing alignment manually. Array views (`SubArray`) are fully supported via an automatic fallback to scalar tuple operations, ensuring correctness at the cost of vectorization.
 
 **Current limitations:**
 - No bounds checking for `vload`/`vstore!` on dense arrays — out-of-bounds access will cause undefined behavior
@@ -88,6 +97,7 @@ Vectorized loads and stores (`vload`, `vstore!`, `vload_multi`, `vstore_multi!`)
 - KernelAbstractions.jl
 - CUDA.jl (for CUDA backend)
 - AMDGPU.jl (for ROCm backend)
+- Metal.jl (for Metal backend)
 
 ## Contents
 ```@contents

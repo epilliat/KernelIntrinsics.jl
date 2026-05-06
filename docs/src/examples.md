@@ -134,76 +134,48 @@ warpfold_kernel(CUDABackend())(dst, src; ndrange=32)
 
 ## Vectorized Memory Access
 
-### Basic Vectorized Access
+`vload` and `vstore!` issue hardware vector loads/stores when the underlying pointer is suitably aligned. The vector width depends on element type — `v4` for 32-bit (Int32/Float32), `v2` for 64-bit (Int64/Float64).
 
-Use `vload` and `vstore!` for aligned vectorized operations:
+### Rebased indexing — block-of-`Nitem` (default)
+
+In the default mode, `idx` is a **1-based block index**: `vload(A, i, Val(N))` loads the `i`-th contiguous block of `N` elements, i.e. `A[(i-1)*N+1 : i*N]`. This is the natural form when each thread owns a fixed-size tile of the array.
 ```julia
-@kernel function vectorized_kernel(dst, src, i)
-    # Load 4 elements with rebase (i=2 → loads from index 5,6,7,8)
-    values = vload(src, i, Val(4), Val(true))
-
-    # Store 4 elements with rebase
-    vstore!(dst, i, values, Val(true))
+@kernel function rebased_kernel(dst, src, i)
+    # i = 2, Nitem = 4 → loads block 2, i.e. elements 5,6,7,8
+    values = vload(src, i, Val(4))
+    vstore!(dst, i, values)            # writes back to elements 5,6,7,8
 end
 
 src = cu(Int32.(1:32))
 dst = cu(zeros(Int32, 32))
-vectorized_kernel(CUDABackend())(dst, src, 2; ndrange=1)
-# dst[5:8] = [5, 6, 7, 8]
+rebased_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[5:8] == [5, 6, 7, 8]
 ```
+When the array's base pointer is `Nitem`-aligned (the common case for top-level GPU allocations), this lowers to a single `ld.global.v4` / `st.global.v4`. Otherwise alignment is resolved internally without user intervention.
 
-This generates efficient `ld.global.v4` and `st.global.v4` PTX instructions. The vector width depends on element type (v4 for Int32/Float32, v2 for Int64/Float64).
+### Direct indexing — start at exactly `idx`
 
-### Dynamic Alignment with `vload_multi` / `vstore_multi!`
-
-When the starting index is not known at compile time, alignment cannot be guaranteed. `vload_multi` and `vstore_multi!` handle this by:
-
-1. Computing `mod = (i - 1) % N + 1` at runtime (where `N` is the vector width)
-2. Using a switch table to dispatch to the appropriate statically-compiled function with `Val(mod)`
-3. Emitting a mix of vectorized instructions to maximize throughput
+Pass `Val(false)` as the fourth argument to load the literal range `A[idx : idx+N-1]`. Use this when the starting position is data-dependent and not necessarily a multiple of `N`.
 ```julia
-@kernel function dynamic_load_kernel(dst, src, i, ::Val{N}) where {N}
-    # i can be any runtime value — alignment handled automatically
-    values = vload_multi(src, i, Val(N))
-    for j in 1:N
-        dst[j] = values[j]
-    end
+@kernel function direct_kernel(dst, src, i)
+    # i = 2, Nitem = 4 → loads elements 2,3,4,5 (no rebase)
+    values = vload(src, i, Val(4), Val(false))
+    vstore!(dst, i, values, Val(false))
 end
 
-src = cu(Int32.(1:100))
-dst = cu(zeros(Int32, 16))
-
-# Works for any starting index
-dynamic_load_kernel(CUDABackend())(dst, src, 7, Val(16); ndrange=1)
-# dst = [7, 8, 9, ..., 22]
+src = cu(Int32.(1:32))
+dst = cu(zeros(Int32, 32))
+direct_kernel(CUDABackend())(dst, src, 2; ndrange=1)
+# dst[2:5] == [2, 3, 4, 5]
 ```
+Direct indexing always goes through the runtime-aligned dispatch path (a mix of `ld.global.v4`, `ld.global.v2`, and scalar loads chosen by the actual offset), so it is correct for any `i` but slightly less aggressive than the aligned rebased fast path.
 
-The generated PTX will contain a mix of `ld.global.v4`, `ld.global.v2`, and scalar loads depending on the runtime alignment, maximizing memory throughput while handling arbitrary offsets.
+### Statically known alignment
+
+If the alignment of the slice you load from is known at compile time, pass it as the fifth argument (`Val(k)` with `1 ≤ k ≤ Nitem`) to avoid the runtime check. `Val(1)` means "fully aligned"; `Val(k>1)` means "misaligned by `k`-elements" and emits a fixed pattern of vector + scalar instructions.
 ```julia
-@kernel function dynamic_store_kernel(dst, i)
-    values = (Int32(10), Int32(20), Int32(30), Int32(40))
-    vstore_multi!(dst, i, values)
-end
-
-dst = cu(zeros(Int32, 100))
-dynamic_store_kernel(CUDABackend())(dst, 3; ndrange=1)
-# dst[3:6] = [10, 20, 30, 40]
-```
-
-### Pattern-Based Access
-
-For custom access patterns, use `vload_pattern` and `vstore_pattern!`:
-```julia
-@kernel function pattern_kernel(dst, src, i)
-    # Pattern (1, 2, 1) means: load 1, then 2, then 1 element
-    values = vload_pattern(src, i, Val((1, 2, 1)))
-    vstore_pattern!(dst, i, values, Val((1, 2, 1)))
-end
-
-src = cu(Int32.(1:16))
-dst = cu(zeros(Int32, 16))
-pattern_kernel(CUDABackend())(dst, src, 2; ndrange=1)
-# dst[2:5] = src[2:5]
+v = view(cu(Int32.(1:32)), 2:32)       # offset by 1 → known misalignment 2
+values = vload(v, 1, Val(4), Val(true), Val(2))   # static (1,2,1) pattern, no branch
 ```
 
 ## Inspecting Generated Code
