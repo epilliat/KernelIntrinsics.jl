@@ -31,17 +31,15 @@ for T in (Int32, UInt32, Float32)
 end
 
 # ── Vote ──────────────────────────────────────────────────────────────────────
-# AMDGPU does not have Uni (uniform predicate vote) — approximated via all.
-# mask is ignored (AMD uses the hardware exec mask implicitly).
-# Note: AMDGPU.Device.ballot returns UInt64 (wavefront is 64 lanes on AMD).
-# Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{All}, mask, pred) =
-#     ballot(pred) == activemask()
-
-# Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{AnyLane}, mask, pred) =
-#     ballot(pred) != zero(UInt64)
-
-# Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Uni}, mask, pred) =
-#     ballot(pred) == activemask()  # same as All: all active lanes agree
-
-# Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mask, pred) =
-#     ballot(pred)  # UInt64 on AMD vs UInt32 on CUDA — handle at call site
+# AMDGPU does not have a `Uni` primitive (uniform predicate vote) — would have
+# to approximate it with `ballot(pred) == activemask()`, same as `All`.
+# `mask` is ignored on AMDGPU (wavefront participation is governed by the
+# hardware `exec` mask register, not a software mask argument).
+# `AMDGPU.Device.ballot(pred)::UInt64` always returns UInt64, with a runtime
+# branch on `wavefrontsize()` — UInt32 result on wave32 widened to UInt64.
+#
+# Only `Ballot` is enabled. The other three modes (All / AnyLane / Uni) are
+# available via the cross-backend `_vote` polyfill chain or, if you want
+# native paths, can be added here using `AMDGPU.Device.ballot` + comparison.
+Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mask, pred) =
+    AMDGPU.Device.ballot(pred)

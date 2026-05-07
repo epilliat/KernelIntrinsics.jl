@@ -38,7 +38,7 @@ elseif TEST_BACKEND == "roc"
         supported = (
             float64       = true,
             system_scope  = false,   # AMDGPU emits no system-scope fence
-            vote_ballot   = false,   # ballot returns UInt64; @vote not implemented in ext
+            vote_ballot   = true,    # native AMDGPU.Device.ballot; UInt64 on wave64
         ),
     )
 elseif TEST_BACKEND == "metal"
