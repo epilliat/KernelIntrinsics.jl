@@ -1,6 +1,7 @@
 import KernelIntrinsics: Up, Down, Xor, Idx
 import KernelIntrinsics: All, AnyLane, Uni, Ballot
-import KernelIntrinsics: _shfl, _vote
+import KernelIntrinsics: MatchAny
+import KernelIntrinsics: _shfl, _vote, _match
 
 const CUDA_SHFL_DISPATCH = Dict(
     Up => :shfl_up_sync,
@@ -32,3 +33,20 @@ for (ModeType, cuda_fname) in CUDA_VOTE_DISPATCH
         CUDA.@device_override @inline _vote(::Type{$ModeType}, mask, pred) = $cuda_fname(mask, pred)
     end
 end
+
+
+# ── Match (sm_70+) ────────────────────────────────────────────────────────────
+# CUDA.jl doesn't expose match.any.sync; reach in via the LLVM intrinsic.
+# Returns UInt32 (CUDA's lane mask width), matching @vote(Ballot, _) on CUDA.
+# UInt8 / UInt16 / UInt32 share the .i32 PTX intrinsic (HW promotes narrower
+# values); UInt64 has its own .i64 variant.
+
+for T in (UInt8, UInt16, UInt32)
+    @eval CUDA.@device_override @inline _match(::Type{MatchAny}, mask, value::$T) =
+        @typed_ccall("llvm.nvvm.match.any.sync.i32", llvmcall, UInt32,
+                     (UInt32, UInt32), mask, UInt32(value))
+end
+
+CUDA.@device_override @inline _match(::Type{MatchAny}, mask, value::UInt64) =
+    @typed_ccall("llvm.nvvm.match.any.sync.i64", llvmcall, UInt32,
+                 (UInt32, UInt64), mask, value)

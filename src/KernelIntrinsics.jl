@@ -7,7 +7,8 @@ export @warpsize, @laneid
 export @fence, @access
 export vload, vstore!
 
-export @shfl, @warpreduce, @warpfold, @vote
+export @shfl, @warpreduce, @warpfold, @vote, @match, @match
+export MatchAny
 #export atomic_store, atomic_load, fence
 #export Workgroup, Device, System
 #export Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed

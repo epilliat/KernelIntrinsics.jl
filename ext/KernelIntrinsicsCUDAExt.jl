@@ -3,7 +3,7 @@ module KernelIntrinsicsCUDAExt
 using CUDA
 using CUDA: LLVMPtr, AS
 using LLVM
-using LLVM.Interop: @asmcall
+using LLVM.Interop: @asmcall, @typed_ccall
 
 
 import KernelIntrinsics: _warpsize, _laneid

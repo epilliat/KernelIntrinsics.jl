@@ -1,5 +1,7 @@
 # Mainly based on CUDA.jl
 
+using Base.Cartesian: @nexprs
+
 # --- Types ---
 
 """
@@ -57,7 +59,7 @@ struct Xor <: Direction end
 
 Shuffle direction where all lanes receive a value from a specific lane index.
 
-`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane` (0-based).
+`@shfl(Idx, val, lane)`: All lanes receive the value from lane `lane`.
 
 Useful for broadcasting a value from one lane to all others.
 """
@@ -100,16 +102,51 @@ struct Uni <: Mode end
 """
     Ballot <: Mode
 
-Vote mode that returns a `UInt32` bitmask where bit `i` (0-based) is set if lane `i`'s
-predicate is true.
+Vote mode that returns an unsigned-integer bitmask. For each `lane` in
+`1..@warpsize()`, bit `lane - 1` of the result is set iff that lane's predicate
+is true.
+
+The return type **matches the warp/wavefront width**:
+- `UInt32` on 32-lane backends (CUDA, Metal, AMDGPU RDNA wave32).
+- `UInt64` on AMDGPU 64-lane wavefronts (CDNA / MI300X).
+
+Use `T = typeof(@vote(Ballot, _))` if you need to derive masks of the same width,
+e.g. `low_below = (T(1) << (lane - 1)) - T(1)`. Do **not** narrow a 64-lane mask
+to `UInt32` — you would silently lose votes from lanes 33..64 and any derived
+`leader_lane = trailing_zeros(mask) + 1` would point at the wrong lane.
 """
 struct Ballot <: Mode end
+
+
+"""
+    MatchMode
+
+Abstract type representing warp match modes (per-lane *value* match).
+
+Subtypes:
+- [`MatchAny`](@ref): Returns bitmask of lanes whose value equals this lane's value.
+"""
+abstract type MatchMode end
+
+"""
+    MatchAny <: MatchMode
+
+Match mode where each lane gets a bitmask of all lanes (including itself) that
+hold the same value as the caller. For `lane` in `1..@warpsize()`, bit `lane - 1`
+of the result is set iff lane `lane`'s value equals the caller's value. Inactive
+lanes contribute zero bits in their position.
+
+The return type matches `@vote(Ballot, _)` — `UInt32` on 32-lane warps, `UInt64`
+on 64-lane wavefronts. See [`@match`](@ref).
+"""
+struct MatchAny <: MatchMode end
 
 
 # --- Implementation ---
 
 function _shfl end
 function _vote end
+function _match end
 
 for DirectType in (Up, Down, Xor, Idx)
     @eval begin
@@ -165,7 +202,7 @@ Perform a warp shuffle operation, exchanging values between lanes within a warp.
 # Arguments
 - `direction`: Shuffle direction ([`Up`](@ref), [`Down`](@ref), [`Xor`](@ref), or [`Idx`](@ref))
 - `val`: Value to shuffle (supports primitives, structs, and NTuples)
-- `src`: Offset (for `Up`/`Down`), XOR mask (for `Xor`), or source lane 0-based index (for `Idx`)
+- `src`: Offset (for `Up`/`Down`), XOR mask (for `Xor`), or source lane index (for `Idx`)
 - `mask`: Lane participation mask (default: `0xffffffff` for all lanes)
 
 # Example
@@ -300,7 +337,7 @@ Perform a warp vote operation, evaluating a predicate across all participating l
     all_above = @vote(All,     val > threshold)  # true if all lanes satisfy predicate
     any_above = @vote(AnyLane, val > threshold)  # true if any lane satisfies predicate
     uniform   = @vote(Uni,     val > threshold)  # true if all lanes have the same result
-    bits      = @vote(Ballot,  val > threshold)  # UInt32 bitmask: bit i (0-based) set if lane i satisfies predicate
+    bits      = @vote(Ballot,  val > threshold)  # bitmask: bit `lane - 1` set iff lane `lane` satisfies predicate
 
     dst[I] = bits
 end
@@ -330,7 +367,7 @@ end
 
     @warpreduce(val, |, ws)   # lane ws holds full OR in lower ws bits
 
-    # broadcast from last lane (0-based index = ws - 1)
+    # broadcast from last lane
     result = @shfl(Idx, val, ws)
 
     return result  # lower 32 bits used for wave32, all 64 for wave64
@@ -348,4 +385,68 @@ end
 
     result = @shfl(Idx, pred, 1)
     return result != UInt32(0)
+end
+
+
+"""
+    @match(mode, value, [mask=0xffffffff])
+
+Per-lane *value* match. For each lane in the warp, returns a bitmask of all
+lanes (including itself) holding the same `value`. Bit `lane - 1` of the
+result is set iff lane `lane`'s value equals the caller's value.
+
+# Arguments
+- `mode`: Match mode ([`MatchAny`](@ref))
+- `value`: Per-lane unsigned-integer value to match. To accelerate the portable
+  polyfill, narrow `value` to the tightest type that holds your domain — e.g.
+  `UInt8` for a digit in `0..255` instead of `UInt32`. The polyfill cost is
+  `8 * sizeof(typeof(value))` warp ballots.
+- `mask`: Lane participation mask (default: `0xffffffff`)
+
+# Return type
+Matches `@vote(Ballot, _)`'s return type — `UInt32` on 32-lane warps,
+`UInt64` on 64-lane wavefronts.
+
+# Backend dispatch
+- **NVIDIA (sm_70+):** native PTX `match.any.sync.{b32,b64}`, single instruction
+  regardless of the storage type's bit width.
+- **AMDGPU / Metal / older NVIDIA:** portable polyfill — `8*sizeof(value)`
+  ballots + AND-tree. Narrower `value` types are cheaper.
+
+# Example
+```julia
+@kernel function digit_dedup(out, src)
+    I = @index(Global, Linear)
+    digit = (src[I] & UInt32(0xFF)) % UInt8     # narrow to UInt8 → 8-ballot polyfill
+    peer_mask = @match(MatchAny, digit)
+    out[I] = peer_mask
+end
+```
+
+See also: [`@vote`](@ref).
+"""
+macro match(ModeType, value, mask=0xffffffff)
+    return quote
+        _match($ModeType, $(esc(mask)), $(esc(value)))
+    end
+end
+
+
+# Portable polyfill: 8*sizeof(T) ballots + AND-tree. Active mask comes from
+# `_vote(Ballot, true)` so the result type tracks the warp width (UInt32 on
+# 32-lane backends, UInt64 on 64-lane wavefronts).
+# Backend overlays (e.g. NVIDIA's match.any.sync via @typed_ccall) override
+# this dispatch on a per-type basis.
+@inline @generated function _match(::Type{MatchAny}, mask, value::T) where {T<:Unsigned}
+    Nbits = 8 * sizeof(T)
+    quote
+        active = _vote(Ballot, mask, true)
+        result = active
+        @nexprs $Nbits b -> begin
+            bit_b = ((value >> ($b - 1)) & one($T)) != zero($T)
+            ballot_b = _vote(Ballot, mask, bit_b)
+            result &= bit_b ? ballot_b : (active & ~ballot_b)
+        end
+        result
+    end
 end
