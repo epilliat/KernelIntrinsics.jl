@@ -41,5 +41,13 @@ end
 # Only `Ballot` is enabled. The other three modes (All / AnyLane / Uni) are
 # available via the cross-backend `_vote` polyfill chain or, if you want
 # native paths, can be added here using `AMDGPU.Device.ballot` + comparison.
+# Direct LLVM intrinsic — bypasses AMDGPU.Device.ballot, which has a runtime
+# branch on `wavefrontsize() == 32`. On gfx9xx (CDNA, incl. MI300X) the dead
+# wave32 arm — `ccall("llvm.amdgcn.ballot", llvmcall, UInt32, …)` — emits a
+# SETCC the AMDGPU instruction selector can't lower, failing the entire
+# kernel compile with `Cannot select: i32 = SETCC ...`.
+# This hard-codes the wave64 intrinsic. If RDNA (wave32) support is added
+# later, dispatch on the compile-time target arch (e.g. via @device_override
+# or AMDGPU.Compiler.target) rather than re-introducing the runtime check.
 Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mask, pred) =
-    AMDGPU.Device.ballot(pred)
+    ccall("llvm.amdgcn.ballot.w64", llvmcall, UInt64, (Bool,), pred)
