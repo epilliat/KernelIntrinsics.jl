@@ -96,10 +96,13 @@ using KernelIntrinsics: MatchAny
             dst[I] = UInt32(trailing_zeros(peer)) + UInt32(1)
         end
 
-        # Lanes 3..7 share value 42; the rest are unique. Their leader (lowest
-        # set bit in peer mask) is lane 3.
+        # Lanes 3..7 share a sentinel value; the rest are unique. Their leader
+        # (lowest set bit in peer mask) is lane 3. Value must be > warpsz so it
+        # doesn't collide with any lane index in `collect(1:warpsz)` — using 42
+        # collides with lane 42 on wave64 (MI300X), pulling lane 42 into the
+        # group and making its leader 3 instead of 42.
         host_vals = UInt32.(collect(1:warpsz))
-        host_vals[3:7] .= UInt32(42)
+        host_vals[3:7] .= UInt32(100)
         vals = to_device(host_vals)
         dst  = to_device(zeros(UInt32, warpsz))
         launch(match_leader_kernel, dst, vals; ndrange=warpsz)
