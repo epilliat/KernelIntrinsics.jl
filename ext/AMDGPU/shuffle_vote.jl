@@ -69,21 +69,24 @@ Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mas
 # AMDGPU). Inline the polyfill body directly into AMDGPU's overlay using the
 # LLVM ballot intrinsic, so type inference stays inside the overlay context.
 
-@inline @generated function _match_any_amdgpu(value::T) where {T<:Unsigned}
-    Nbits = 8 * sizeof(T)
-    quote
-        active = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), true)
-        result = active
-        @nexprs $Nbits b -> begin
-            bit_b = ((value >> ($b - 1)) & one($T)) != zero($T)
-            ballot_b = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), bit_b)
-            result &= bit_b ? ballot_b : (active & ~ballot_b)
-        end
-        result
-    end
-end
-
+# Per-type unrolled match.any polyfill, generated at @eval time. Each
+# specialization is a flat sequence of ballot calls + AND-tree updates,
+# avoiding any @generated indirection (which we observed gets dynamically
+# dispatched when called from within an @overlay-installed method).
 for T in (UInt8, UInt16, UInt32, UInt64)
-    @eval Base.Experimental.@overlay AMDGPU.method_table @inline _match(::Type{MatchAny}, mask, value::$T) =
-        _match_any_amdgpu(value)
+    Nbits = 8 * sizeof(T)
+    body = Expr(:block,
+        :(active = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), true)),
+        :(result = active),
+    )
+    for b in 1:Nbits
+        push!(body.args, quote
+            let bit_b = ((value >> $(b - 1)) & one($T)) != zero($T)
+                ballot_b = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), bit_b)
+                result &= bit_b ? ballot_b : (active & ~ballot_b)
+            end
+        end)
+    end
+    push!(body.args, :(return result))
+    @eval Base.Experimental.@overlay AMDGPU.method_table @inline _match(::Type{MatchAny}, mask, value::$T) = $body
 end
