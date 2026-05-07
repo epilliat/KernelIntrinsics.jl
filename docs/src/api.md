@@ -58,6 +58,12 @@ KernelIntrinsics.AnyLane
 KernelIntrinsics.Uni
 KernelIntrinsics.Ballot
 ```
+### Match
+```@docs
+@match
+KernelIntrinsics.MatchMode
+KernelIntrinsics.MatchAny
+```
 
 ## Index
 ```@index
