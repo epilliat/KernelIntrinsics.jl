@@ -46,8 +46,14 @@ end
 # wave32 arm — `ccall("llvm.amdgcn.ballot", llvmcall, UInt32, …)` — emits a
 # SETCC the AMDGPU instruction selector can't lower, failing the entire
 # kernel compile with `Cannot select: i32 = SETCC ...`.
-# This hard-codes the wave64 intrinsic. If RDNA (wave32) support is added
-# later, dispatch on the compile-time target arch (e.g. via @device_override
-# or AMDGPU.Compiler.target) rather than re-introducing the runtime check.
+#
+# Note on the intrinsic name: `llvm.amdgcn.ballot.i64` is the canonical
+# overload-mangled name; AMDGPU.jl's older `llvm.amdgcn.ballot.w64` spelling
+# compiles on the current LLVM/GPUCompiler combo but generates a kernel that
+# faults at runtime. Use `.i64`.
+#
+# Hard-codes wave64. If RDNA (wave32) support is added later, dispatch on the
+# compile-time target arch (e.g. via @device_override or AMDGPU.Compiler.target)
+# rather than re-introducing the runtime wavefrontsize() check.
 Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mask, pred) =
-    ccall("llvm.amdgcn.ballot.w64", llvmcall, UInt64, (Bool,), pred)
+    ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), pred)
