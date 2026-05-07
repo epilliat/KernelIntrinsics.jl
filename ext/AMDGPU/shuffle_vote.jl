@@ -1,7 +1,9 @@
 # ext/AMDGPUExt/warp.jl
 import KernelIntrinsics: Up, Down, Xor, Idx
 import KernelIntrinsics: All, AnyLane, Uni, Ballot
-import KernelIntrinsics: _shfl, _vote
+import KernelIntrinsics: MatchAny
+import KernelIntrinsics: _shfl, _vote, _match
+using Base.Cartesian: @nexprs
 
 # ── Shuffle ───────────────────────────────────────────────────────────────────
 # AMDGPU uses LLVM intrinsics via AMDGPU.Device.* (not top-level AMDGPU.*).
@@ -57,3 +59,31 @@ end
 # rather than re-introducing the runtime wavefrontsize() check.
 Base.Experimental.@overlay AMDGPU.method_table @inline _vote(::Type{Ballot}, mask, pred) =
     ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), pred)
+
+
+# ── Match ─────────────────────────────────────────────────────────────────────
+# The portable polyfill in src/warp.jl can't be used here: its `@generated`
+# body calls `_vote(Ballot, …)`, but Base.Experimental.@overlay overrides
+# don't propagate into the polyfill body during inference, leaving _match
+# dynamically dispatched (same root cause as the original @match failure on
+# AMDGPU). Inline the polyfill body directly into AMDGPU's overlay using the
+# LLVM ballot intrinsic, so type inference stays inside the overlay context.
+
+@inline @generated function _match_any_amdgpu(value::T) where {T<:Unsigned}
+    Nbits = 8 * sizeof(T)
+    quote
+        active = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), true)
+        result = active
+        @nexprs $Nbits b -> begin
+            bit_b = ((value >> ($b - 1)) & one($T)) != zero($T)
+            ballot_b = ccall("llvm.amdgcn.ballot.i64", llvmcall, UInt64, (Bool,), bit_b)
+            result &= bit_b ? ballot_b : (active & ~ballot_b)
+        end
+        result
+    end
+end
+
+for T in (UInt8, UInt16, UInt32, UInt64)
+    @eval Base.Experimental.@overlay AMDGPU.method_table @inline _match(::Type{MatchAny}, mask, value::$T) =
+        _match_any_amdgpu(value)
+end
