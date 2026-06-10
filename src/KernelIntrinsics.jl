@@ -9,6 +9,7 @@ export vload, vstore!
 
 export @shfl, @warpreduce, @warpfold, @vote, @match
 export MatchAny
+export @sleep
 #export atomic_store, atomic_load, fence
 #export Workgroup, Device, System
 #export Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
@@ -28,6 +29,7 @@ include("device.jl")
 include("scopes_orderings.jl")
 include("vectorization.jl")
 include("warp.jl")
+include("sleep.jl")
 
 
 end # module KernelIntrinsics

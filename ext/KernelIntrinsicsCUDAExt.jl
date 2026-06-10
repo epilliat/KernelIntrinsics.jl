@@ -22,5 +22,6 @@ include("CUDA/device.jl")
 include("CUDA/scopes_ordering.jl")
 include("CUDA/shuffle_vote.jl")
 include("CUDA/vectorization.jl")
+include("CUDA/sleep.jl")
 
 end # module KernelIntrinsicsCUDAExt

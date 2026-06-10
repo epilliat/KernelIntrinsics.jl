@@ -30,5 +30,6 @@ include("AMDGPU/device.jl")
 include("AMDGPU/scopes_ordering.jl")
 include("AMDGPU/shuffle_vote.jl")
 include("AMDGPU/vectorization.jl")
+include("AMDGPU/sleep.jl")
 
 end # module KernelIntrinsicsAMDGPUExt
