@@ -176,11 +176,18 @@ _shfl_recurse(op, x::Bool) = op(UInt32(x)) % Bool
 @generated function _shfl_recurse(op, val::T) where {T}
     if isprimitivetype(T)
         return :(op(val))
+    end
+    field_exprs = [:(_shfl_recurse(op, getfield(val, $i))) for i in 1:fieldcount(T)]
+    if T <: Tuple
+        # Heterogeneous tuple (homogeneous NTuple has its own method above):
+        # reconstruct with `tuple(...)`, NOT `T(...)` — a Tuple type has no
+        # positional-args constructor (`Tuple{Int8,Int16}(a,b)` is a MethodError;
+        # it only constructs from a single iterable), which previously failed to
+        # compile on-device for mixed-field-size tuples.
+        return :(tuple($(field_exprs...)))
     else
-        field_exprs = [:(_shfl_recurse(op, getfield(val, $i))) for i in 1:fieldcount(T)]
-        return quote
-            T($(field_exprs...))
-        end
+        # Struct: default all-fields constructor.
+        return :(T($(field_exprs...)))
     end
 end
 

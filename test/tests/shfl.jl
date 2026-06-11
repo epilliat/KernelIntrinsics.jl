@@ -117,6 +117,25 @@ end
             end
         end
 
+        # Heterogeneous-field tuple (mixed leaf sizes) — regression test: the
+        # generic _shfl_recurse fallback used to reconstruct via `T(fields...)`,
+        # which is a MethodError for Tuple types (no positional-args constructor)
+        # → on-device compile failure. Now reconstructs via `tuple(...)`.
+        @testset "Up Tuple{Int8,Int16} (heterogeneous)" begin
+            @kernel function shfl_hettuple_kernel(dst, src)
+                I = @index(Global, Linear)
+                dst[I] = @shfl(Up, src[I], 1)
+            end
+            src = to_device([(Int8(i % 100), Int16(i + 1000)) for i in 1:warpsz])
+            dst = to_device([(Int8(0), Int16(0)) for _ in 1:warpsz])
+            launch(shfl_hettuple_kernel, dst, src; ndrange=warpsz)
+            result = from_device(dst)
+            @test result[1] == (Int8(1), Int16(1001))
+            for i in 2:warpsz
+                @test result[i] == (Int8((i - 1) % 100), Int16(i + 999))
+            end
+        end
+
         # ComplexType has a Float64 leaf — fall back to ComplexTypeMetal
         # (Float16 leaf) on backends without Float64 support.
         if HOOKS.supported.float64
