@@ -146,6 +146,22 @@
         synchronize(backend)
         @test @allowscalar (b[5], b[6], b[7], b[8]) == (5, 6, 7, 8)
     end
+
+    # Regression: a block of Nitem*sizeof(T) >= 256 bytes (e.g. 32xFloat64 = 256 B)
+    # used to mis-compute the load/store alignment (`0x01 << trailing_zeros(...)`
+    # overflowed UInt8 to 0 → Val(0) → on-device compile failure).
+    @testset "Round-trip large block (>=256 B)" begin
+        @kernel function test_rt_big(a, b, i)
+            v = KernelIntrinsics.vload(a, i, Val(32), Val(true))
+            KernelIntrinsics.vstore!(b, i, v, Val(true))
+        end
+        for T in (Float64, Int64)
+            a = to_device(T.(1:64)); b = to_device(zeros(T, 64))
+            test_rt_big(backend)(a, b, 2; ndrange=1)  # block 2 = elements 33:64
+            synchronize(backend)
+            @test from_device(b)[33:64] == T.(33:64)
+        end
+    end
 end
 
 
