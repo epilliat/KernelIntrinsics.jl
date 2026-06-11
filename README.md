@@ -5,6 +5,7 @@ A Julia package providing low-level memory access primitives and warp-level oper
 
 - **Memory Fences** and **ordered memory access** (`@fence`, `@access`) with acquire/release semantics
 - **Warp operations**: shuffle (`@shfl`), inclusive scan (`@warpreduce`), reduction (`@warpfold`), vote (`@vote`)
+- **Spin-loop backoff** (`@sleep`): hardware sleep hint (`s_sleep` on AMD, `nanosleep` on CUDA, no-op fallback) for busy-wait loops
 - **Vectorized memory operations** (`vload`, `vstore!`, `vload_multi`, `vstore_multi!`) generating `ld.global.v4`/`st.global.v4` PTX instructions
 
 Currently supports CUDA, ROCm and Metal backends. Other backends planned.

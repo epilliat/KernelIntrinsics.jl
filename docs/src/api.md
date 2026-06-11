@@ -42,6 +42,10 @@ KernelIntrinsics.SeqCst
 @warpfold
 @vote
 ```
+### Spin-loop backoff
+```@docs
+@sleep
+```
 ### Shuffle Directions
 ```@docs
 KernelIntrinsics.Direction

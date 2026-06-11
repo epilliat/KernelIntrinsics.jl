@@ -18,6 +18,7 @@
   - `@shfl`: Warp shuffle operations (Up, Down, Xor, Idx modes)
   - `@warpreduce`: Inclusive scan within a warp
   - `@warpfold`: Warp-wide reduction to a single value
+- **Spin-loop backoff**: `@sleep n` emits a hardware sleep hint (`s_sleep` on AMD, `nanosleep` on CUDA sm_70+, no-op elsewhere) so busy-wait/spin loops back off instead of hammering the memory subsystem
 - **Vectorized Memory Operations**: Hardware-accelerated vector loads and stores with `vload` and `vstore!`. Two indexing modes are available: *rebased* (default) where `idx` selects a contiguous block of `Nitem` elements (`(idx-1)*Nitem+1 … idx*Nitem`), and *direct* where `idx` is the literal starting index. Array views (`SubArray`) are supported and fall back to scalar tuple operations automatically.
 
 ## Cross-Architecture Support
