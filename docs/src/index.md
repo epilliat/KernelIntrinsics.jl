@@ -106,6 +106,12 @@ Pages = ["api.md", "examples.md"]
 Depth = 2
 ```
 
+## Sponsors
+
+KernelIntrinsics.jl is an open-source project maintained on personal time. If it
+is useful to you — especially in a production or HPC setting — you can support
+its development via [GitHub Sponsors](https://github.com/sponsors/epilliat).
+
 ## License
 
 MIT License
