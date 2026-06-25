@@ -38,6 +38,7 @@ Pkg.add("KernelIntrinsics")
 ```
 
 ## Quick Start
+In CUDA, try
 ```julia
 using KernelIntrinsics
 using KernelAbstractions, CUDA
@@ -48,10 +49,28 @@ using KernelAbstractions, CUDA
     @access Flag[1] = 1  # Release store
 end
 
-X = cu([1])
+X    = cu([1])
 Flag = cu([0])
 example_kernel(CUDABackend())(X, Flag; ndrange=1)
 ```
+
+Equivallently, in `Metal` the example kernel is 
+```julia
+using KernelIntrinsics
+using KernelAbstractions, Metal
+
+@kernel function example_kernel(X, Flag)
+    X[1] = 10
+    @fence  # Ensure X[1]=10 is visible to all threads
+    @access Flag[1] = 1  # Release store
+end
+
+X    = mtl([Int32(1)])
+Flag = mtl([Int32(0)])
+example_kernel(MetalBackend())(X, Flag; ndrange=1)
+```
+
+
 
 ## Memory Ordering Semantics
 
