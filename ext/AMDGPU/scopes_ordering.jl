@@ -60,11 +60,33 @@ for ScopeType in [Workgroup, Device, System]
             fence syncscope("$scope_str") $order_str
             ret void
         """
+        # A WORKGROUP-scope release fence lowers to NO instruction on gfx9xx (intra-workgroup
+        # ordering is implicit) — so it does NOT drain outstanding vector-memory stores to the
+        # device-coherent point (L2). For a cross-BLOCK release built on cache-bypassing
+        # (Device-scope) atomic stores — the decoupled-lookback message-passing pattern — the
+        # producer's data stores MUST be drained to L2 before it stores the flag, or a
+        # consumer block can observe the flag ahead of the data. We add an explicit
+        # `s_waitcnt vmcnt(0)` (encoded simm16 0xf70 = vmcnt 0, expcnt/lgkmcnt max) after the
+        # release fence. This is the DRAIN WITHOUT the L2 writeback/invalidate that a
+        # Device-scope fence emits (`buffer_wbl2`+`buffer_inv`, ~2x slower) — matching
+        # rocPRIM's `atomic_fence_release_vmem_order_only()` for gfx94x. Applied to the
+        # RELEASE and ACQREL workgroup fences (the store-ordering side); pure ACQUIRE needs no
+        # drain (it orders following reads only). Device/System fences already drain+flush.
+        needs_drain = (ScopeType === Workgroup) && (OrderType === Release || OrderType === AcqRel)
+        fbody = needs_drain ?
+            quote
+                Base.llvmcall($ir, Nothing, Tuple{})
+                ccall("llvm.amdgcn.s.waitcnt", llvmcall, Cvoid, (Int32,), Int32(0xf70))
+                nothing
+            end :
+            quote
+                Base.llvmcall($ir, Nothing, Tuple{})
+            end
         @eval begin
             Base.Experimental.@overlay AMDGPU.method_table @inline function fence(
                 ::Type{$ScopeType}, ::Type{$OrderType}
             )
-                Base.llvmcall($ir, Nothing, Tuple{})
+                $fbody
             end
         end
     end

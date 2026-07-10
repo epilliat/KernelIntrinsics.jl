@@ -127,11 +127,26 @@ macro laneid()
     end
 end
 
+# Classify a macro argument as a Scope or Ordering by its SYMBOL NAME — NOT by `eval`ing it.
+# `eval(arg)` runs in the KernelIntrinsics module at macro-expansion time; when another package
+# expands `@fence`/`@access` with an explicit scope/ordering during ITS precompilation, that is an
+# "Evaluation into the closed module KernelIntrinsics" and breaks incremental precompilation. Names
+# match the Scope/Ordering singleton type names; a qualified argument (e.g. `KI.Device`) is accepted
+# by taking its leaf symbol. Behaviour is otherwise identical: the original arg expr is returned
+# unchanged (it resolves to the type at the call site, exactly as before).
+const _SCOPE_SYMS = (:Device, :Workgroup, :System)
+const _ORDERING_SYMS = (:Acquire, :Release, :AcqRel, :SeqCst, :Relaxed, :Weak, :Volatile)
+_arg_leaf(a::Symbol) = a
+_arg_leaf(a::QuoteNode) = a.value isa Symbol ? a.value : :_notaname_
+_arg_leaf(a::Expr) = a.head === :. ? _arg_leaf(a.args[end]) : :_notaname_
+_arg_leaf(::Any) = :_notaname_
+_is_scope_arg(a) = _arg_leaf(a) in _SCOPE_SYMS
+_is_ordering_arg(a) = _arg_leaf(a) in _ORDERING_SYMS
+
 function scope_ordering(args...)
     scope = nothing
     ordering = nothing
 
-    # Check number of arguments
     if length(args) > 2
         throw(ArgumentError(
             "Too many arguments: expected 0-2, got $(length(args)). " *
@@ -139,53 +154,36 @@ function scope_ordering(args...)
         ))
     end
 
-    # Valid types (hardcoded to avoid InteractiveUtils dependency)
     valid_scopes = "Device, Workgroup, System"
     valid_orderings = "Acquire, Release, AcqRel, SeqCst, Relaxed, Weak, Volatile"
 
-    # Validate all arguments are defined
-    for arg in args
-        if !isdefined(KernelIntrinsics, arg)
-            throw(ArgumentError(
-                "'$arg' is not defined.\n" *
-                "Valid scopes: $valid_scopes\n" *
-                "Valid orderings: $valid_orderings"
-            ))
-        end
-    end
-
-    # Parse arguments based on length
     if length(args) == 0
         # Use defaults (both nothing)
 
     elseif length(args) == 1
-        val = eval(args[1])
-        if val <: Scope
+        if _is_scope_arg(args[1])
             scope = args[1]
-        elseif val <: Ordering
+        elseif _is_ordering_arg(args[1])
             ordering = args[1]
         else
             throw(ArgumentError(
-                "'$(nameof(val))' is neither a Scope nor an Ordering.\n" *
+                "'$(args[1])' is neither a Scope nor an Ordering.\n" *
                 "Valid scopes: $valid_scopes\n" *
                 "Valid orderings: $valid_orderings"
             ))
         end
 
     elseif length(args) == 2
-        val1 = eval(args[1])
-        val2 = eval(args[2])
-
-        if val1 <: Scope && val2 <: Ordering
+        if _is_scope_arg(args[1]) && _is_ordering_arg(args[2])
             scope = args[1]
             ordering = args[2]
-        elseif val1 <: Ordering && val2 <: Scope
+        elseif _is_ordering_arg(args[1]) && _is_scope_arg(args[2])
             ordering = args[1]
             scope = args[2]
         else
             throw(ArgumentError(
                 "Arguments must be one Scope and one Ordering (in any order).\n" *
-                "Got: $(nameof(val1)) and $(nameof(val2))\n" *
+                "Got: $(args[1]) and $(args[2])\n" *
                 "Valid scopes: $valid_scopes\n" *
                 "Valid orderings: $valid_orderings"
             ))
@@ -198,13 +196,13 @@ end
 macro fence(args...)
     #No arguments - fallback to AcqRel and Device
     scope, ordering = scope_ordering(args...)
-    scope = isnothing(scope) ? Device : scope
-    ordering = isnothing(ordering) ? AcqRel : ordering
-    if eval(ordering) in [Weak, Volatile, Relaxed]
+    if _arg_leaf(ordering) in (:Weak, :Volatile, :Relaxed)
         throw(ArgumentError(
             "Fences allows synchronizing orderings: Acquire, Release, AcqRel, or SeqCst."
         ))
     end
+    scope = isnothing(scope) ? Device : scope
+    ordering = isnothing(ordering) ? AcqRel : ordering
     return quote
         $(fence)($scope, $ordering)
     end
@@ -214,21 +212,19 @@ macro access(args...)
     expr = args[end]
     scope, ordering = scope_ordering(args[begin:end-1]...)
 
-    # Check ordering exists and evaluate it
+    # Validate the ordering by symbol name (no `eval` — see scope_ordering note)
     if !isnothing(ordering)
-        ordering_val = eval(ordering)
-        if ordering_val in [AcqRel, SeqCst]
+        oname = _arg_leaf(ordering)
+        if oname in (:AcqRel, :SeqCst)
             throw(ArgumentError(
                 "AcqRel and SeqCst are not valid orderings for loads and stores; use @fence instead."
             ))
         end
-        if !isnothing(scope)
-            if ordering_val in [Weak, Volatile]
-                throw(ArgumentError(
-                    "Cannot specify a scope with $(nameof(ordering_val)) ordering. " *
-                    "$(nameof(ordering_val)) operations are scope-less."
-                ))
-            end
+        if !isnothing(scope) && oname in (:Weak, :Volatile)
+            throw(ArgumentError(
+                "Cannot specify a scope with $(oname) ordering. " *
+                "$(oname) operations are scope-less."
+            ))
         end
     end
 
