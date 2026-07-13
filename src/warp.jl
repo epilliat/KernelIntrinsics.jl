@@ -268,13 +268,21 @@ end
 See also: [`@warpfold`](@ref), [`@shfl`](@ref)
 """
 macro warpreduce(val, op, lane=:(KernelIntrinsics._laneid()), ws=:(KernelIntrinsics._warpsize()), mask=0xffffffff)
+    # The accumulate step is a SELECT, not a branch. Written as `if lane > offset`, it is a
+    # divergent branch inside the loop, and the compiler emits a real exec-mask save/restore at
+    # every one of the log2(warpsize) steps. `ifelse` compiles to a predicated move instead.
+    #
+    # Applying `op` unconditionally is safe: for lanes at or below `offset` the shuffle source is
+    # out of range, and both CUDA's and AMD's shuffle-up return the lane's OWN value there, so the
+    # discarded computation is `op(val, val)` on live data — never garbage, never a trap.
+    #
+    # @warpfold below has always been branchless; this only brings @warpreduce in line.
     quote
         local offset = 1
         while offset < $(esc(ws))
             shuffled = @shfl(Up, $(esc(val)), offset, $(esc(mask)))
-            if $(esc(lane)) > offset
-                $(esc(val)) = $(esc(op))(shuffled, $(esc(val)))
-            end
+            $(esc(val)) = ifelse($(esc(lane)) > offset, $(esc(op))(shuffled, $(esc(val))),
+                                 $(esc(val)))
             offset <<= 1
         end
     end

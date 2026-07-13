@@ -189,6 +189,42 @@ end
             @test from_device(dst) ≈ Float32.(cumsum(data))
         end
 
+        @testset "Float64 prefix sum" begin
+            data = Float64.(1:warpsz)
+            src = to_device(data)
+            dst = to_device(zeros(Float64, warpsz))
+            launch(kernel_warpreduce_sum, dst, src; ndrange=warpsz)
+            @test from_device(dst) ≈ cumsum(data)
+        end
+
+        # The accumulate step is an `ifelse`, so the select now carries the WHOLE value: a
+        # multi-field type must survive it, not just a scalar register.
+        @testset "ComplexF32 prefix sum" begin
+            data = ComplexF32.(1:warpsz, warpsz:-1:1)
+            src = to_device(data)
+            dst = to_device(zeros(ComplexF32, warpsz))
+            launch(kernel_warpreduce_sum, dst, src; ndrange=warpsz)
+            @test from_device(dst) ≈ cumsum(data)
+        end
+
+        # `op` is applied as `op(shuffled, val)`, with `shuffled` coming from the LOWER lane.
+        # A non-commutative (but associative) op pins that order down: left-projection makes
+        # every lane end up holding lane 1's value. A swapped order would leave each lane with
+        # its own value instead, which a commutative op like `+` could never reveal.
+        @testset "non-commutative op keeps operand order" begin
+            @kernel function kernel_warpreduce_left(dst, src)
+                I = @index(Global, Linear)
+                val = src[I]
+                @warpreduce(val, (a, b) -> a)
+                dst[I] = val
+            end
+
+            src = to_device(Int32.(1:warpsz))
+            dst = to_device(zeros(Int32, warpsz))
+            launch(kernel_warpreduce_left, dst, src; ndrange=warpsz)
+            @test from_device(dst) == fill(Int32(1), warpsz)
+        end
+
     end  # @warpreduce
 
     # ── @warpfold ─────────────────────────────────────────────────────────────
