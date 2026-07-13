@@ -1,7 +1,9 @@
 module KernelIntrinsicsCUDAExt
 
 using CUDA
-using CUDA: LLVMPtr, AS
+using CUDA: LLVMPtr, AS, CUDABackend
+using KernelAbstractions
+const KA = KernelAbstractions
 using LLVM
 using LLVM.Interop: @asmcall, @typed_ccall
 
@@ -23,5 +25,6 @@ include("CUDA/scopes_ordering.jl")
 include("CUDA/shuffle_vote.jl")
 include("CUDA/vectorization.jl")
 include("CUDA/sleep.jl")
+include("CUDA/dynlocalmem.jl")
 
 end # module KernelIntrinsicsCUDAExt

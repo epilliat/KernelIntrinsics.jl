@@ -10,6 +10,7 @@ export vload, vstore!
 export @shfl, @warpreduce, @warpfold, @vote, @match
 export MatchAny
 export @sleep
+export @dynlocalmem, launch!, max_dynamic_localmem
 #export atomic_store, atomic_load, fence
 #export Workgroup, Device, System
 #export Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
@@ -30,6 +31,7 @@ include("scopes_orderings.jl")
 include("vectorization.jl")
 include("warp.jl")
 include("sleep.jl")
+include("dynlocalmem.jl")
 
 
 end # module KernelIntrinsics

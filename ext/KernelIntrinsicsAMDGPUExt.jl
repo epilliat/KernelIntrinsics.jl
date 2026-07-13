@@ -3,7 +3,9 @@
 module KernelIntrinsicsAMDGPUExt
 
 using AMDGPU
-using AMDGPU: LLVMPtr, AS
+using AMDGPU: LLVMPtr, AS, ROCBackend
+using KernelAbstractions
+const KA = KernelAbstractions
 using LLVM
 using LLVM.Interop: @asmcall
 
@@ -31,5 +33,6 @@ include("AMDGPU/scopes_ordering.jl")
 include("AMDGPU/shuffle_vote.jl")
 include("AMDGPU/vectorization.jl")
 include("AMDGPU/sleep.jl")
+include("AMDGPU/dynlocalmem.jl")
 
 end # module KernelIntrinsicsAMDGPUExt

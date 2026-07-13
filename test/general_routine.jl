@@ -21,3 +21,7 @@ include("tests/shfl.jl")
 include("tests/match.jl")
 include("tests/vectorization_custom_test.jl")
 include("tests/sleep.jl")
+
+# Dynamic workgroup memory is implemented for CUDA and AMD only; Metal has no
+# equivalent opt-in region exposed through KernelAbstractions.
+TEST_BACKEND in ("cuda", "roc") && include("tests/dynlocalmem.jl")
