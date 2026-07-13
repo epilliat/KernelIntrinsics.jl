@@ -156,3 +156,66 @@ for ScopeType in [Workgroup, Device, System]
         end
     end
 end
+
+# ── 128-bit (16-byte) atomic load/store — Device/Relaxed, gfx94x (CDNA3) ──────
+#
+# LLVM has NO atomic-i128 lowering for AMDGPU (`load atomic i128` → InvalidIRError), so the 16-byte
+# coherent+atomic access is emitted as the raw GCN instruction, exactly as rocPRIM does
+# (rocprim/intrinsics/atomic.hpp, ROCPRIM_TARGET_CDNA3): a SINGLE
+#     global_load_dwordx4 … sc1     /     global_store_dwordx4 … sc1
+# followed by `s_waitcnt vmcnt(0)`. `sc1` makes the access coherent at the agent (Device) scope — it
+# bypasses the stale L1 and reaches the coherent point — and being ONE instruction it is a torn-free
+# 16-byte snapshot. That atomicity is the whole point: it lets a {status, value} descriptor be
+# published and read as a single unit, with no flag→value dependent second load and no fences (the
+# decoupled-lookback packed-descriptor pattern; cf. the packed UInt64 path for ≤4-byte payloads).
+#
+# Emitted via `@asmcall` (LLVM.jl's *builder*-based inline asm), NOT `Base.llvmcall` with an IR
+# string: a hand-written llvmcall asm string mishandles the pointer/operand ABI here and faults at
+# runtime, while the builder does the register/operand setup correctly (verified on gfx942).
+#
+# Addressing is SADDR+VOFFSET (`global_load_dwordx4 vdst, voffset, saddr`) — precisely what the
+# compiler itself emits for `data[index]`: the array BASE is uniform (an SGPR pair) and the per-lane
+# byte OFFSET lives in a VGPR. That maps exactly onto the (array, index) API.
+#
+# RESTRICTED TO 16-BYTE **PRIMITIVE** TYPES (UInt128 / Int128). A composite 16-byte aggregate
+# (ComplexF64, NTuple{2,UInt64}, NTuple{4,UInt32}, a struct) CANNOT be carried: `reinterpret` of a
+# composite does not GPU-codegen (the same limitation that restricts the ≤4-byte packed path to
+# `isprimitivetype`), and an aggregate is rejected by the `=v`/`v` asm constraint as well — both
+# verified on gfx942. Callers holding a composite aggregate must use the split (flag + value) protocol.
+#
+# ARCH: `sc1` is CDNA3 (gfx94x / MI300). Older CDNA (gfx90a MI200, gfx908 MI100) spell the same cache
+# behaviour `glc dlc` / `glc`; rocPRIM dispatches on the target. Callers must gate to gfx94x until an
+# arch dispatch is added here. Only Device/Relaxed is provided — the coherence comes from `sc1` and the
+# atomicity from the single instruction; no other scope/ordering pair is implemented differently.
+
+for T in (UInt128, Int128)
+    @eval begin
+        Base.Experimental.@overlay AMDGPU.method_table @inline function atomic_load(
+            data::ROCDeviceArray{$T,N,1},
+            index::Integer,
+            ::Type{Device},
+            ::Type{Relaxed},
+        ) where {N}
+            base = reinterpret(UInt64, pointer(data, 1))   # uniform array base → SGPR pair (saddr)
+            off = UInt32((index - 1) * 16)                 # per-lane byte offset → VGPR (voffset)
+            @asmcall(
+                "global_load_dwordx4 \$0, \$1, \$2 sc1\ns_waitcnt vmcnt(0)",
+                "=v,v,s", true, $T, Tuple{UInt32,UInt64}, off, base,
+            )
+        end
+        Base.Experimental.@overlay AMDGPU.method_table @inline function atomic_store!(
+            data::ROCDeviceArray{$T,N,1},
+            index::Integer,
+            val::$T,
+            ::Type{Device},
+            ::Type{Relaxed},
+        ) where {N}
+            base = reinterpret(UInt64, pointer(data, 1))
+            off = UInt32((index - 1) * 16)
+            @asmcall(
+                "global_store_dwordx4 \$0, \$1, \$2 sc1\ns_waitcnt vmcnt(0)",
+                "v,v,s", true, Nothing, Tuple{UInt32,$T,UInt64}, off, val, base,
+            )
+        end
+    end
+end
