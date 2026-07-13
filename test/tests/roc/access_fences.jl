@@ -88,22 +88,25 @@ end
 end
 
 for T in (UInt128, Int128)
-    n = 64
-    # values whose HIGH and LOW 64-bit halves both differ per element: a half-load / torn load
-    # (e.g. a split into 2× dwordx2 picking up mismatched halves) cannot pass this.
-    host = T[(T(i) << 64) | T(0x5a5a5a5a00000000 + i) for i in 1:n]
+    # `let` (hard scope): this file already has file-level `src`/`dst` globals, and a bare
+    # assignment in the loop's soft scope would warn about the ambiguity.
+    let n = 64
+        # values whose HIGH and LOW 64-bit halves both differ per element: a half-load / torn load
+        # (e.g. a split into 2× dwordx2 picking up mismatched halves) cannot pass this.
+        host = T[(T(i) << 64) | T(0x5a5a5a5a00000000 + i) for i in 1:n]
 
-    # atomic_store! roundtrip: GPU atomically stores src → dst, host compares
-    src = ROCArray(host)
-    dst = ROCArray(zeros(T, n))
-    AMDGPU.@sync test_atomic128_store!(ROCBackend(), 64)(dst, src; ndrange=n)
-    @test Array(dst) == host
+        # atomic_store! roundtrip: GPU atomically stores src → dst, host compares
+        src128 = ROCArray(host)
+        dst128 = ROCArray(zeros(T, n))
+        AMDGPU.@sync test_atomic128_store!(ROCBackend(), 64)(dst128, src128; ndrange=n)
+        @test Array(dst128) == host
 
-    # atomic_load roundtrip: GPU atomically loads src → dst, host compares
-    src2 = ROCArray(host)
-    dst2 = ROCArray(zeros(T, n))
-    AMDGPU.@sync test_atomic128_load!(ROCBackend(), 64)(dst2, src2; ndrange=n)
-    @test Array(dst2) == host
+        # atomic_load roundtrip: GPU atomically loads src → dst, host compares
+        src128b = ROCArray(host)
+        dst128b = ROCArray(zeros(T, n))
+        AMDGPU.@sync test_atomic128_load!(ROCBackend(), 64)(dst128b, src128b; ndrange=n)
+        @test Array(dst128b) == host
+    end
 end
 
 # ── ISA: one dwordx4 + sc1 + drain, and NOT split into two dwordx2 ────────────
