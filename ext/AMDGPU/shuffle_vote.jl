@@ -6,31 +6,81 @@ import KernelIntrinsics: _shfl, _vote, _match
 using Base.Cartesian: @nexprs
 
 # ── Shuffle ───────────────────────────────────────────────────────────────────
-# AMDGPU uses LLVM intrinsics via AMDGPU.Device.* (not top-level AMDGPU.*).
-# Note: no mask argument on AMD (wavefront uses hardware exec register).
-# delta/lane must be Int32; shfl_down additionally requires a Cuint width arg.
+# Note: no mask argument on AMD (wavefront participation is the hardware exec register).
+# delta/lane must be Int32.
+#
+# We do NOT use AMDGPU.Device.shfl_*. Those derive the source lane from
+# `activelane()` = `__ockl_activelane_u32` = `mbcnt(EXEC)` = the rank among the *ACTIVE*
+# lanes. HIP's `__shfl` uses `__lane_id()` = `mbcnt` with an ALL-ONES mask = the *physical*
+# lane. The two differ the moment the wavefront diverges, and that costs twice:
+#
+#   * CORRECTNESS: under divergence `activelane()` returns a COMPACTED index, so the
+#     shuffle reads the wrong lane. Observed as a GPU memory-access fault whenever the
+#     compiler fully unrolled a shuffle sequence (a divergent `if` around the reduce was
+#     accidentally *preventing* the unroll and hiding it).
+#   * PERFORMANCE: `activelane()` depends on EXEC, so LLVM can neither hoist nor CSE it and
+#     recomputes the lane index at EVERY shuffle. Measured on KernelForge's MI300A F64 scan
+#     lookback: 9 `activelane()` (9 `v_mbcnt_lo` + 9 `v_mbcnt_hi`) for 8 `ds_bpermute`, plus
+#     the width arithmetic and guard around each. Switching to the physical lane took that
+#     scan from 40.2% to 44.8% of peak (−10%), dropped `v_readlane_b32` 23 → 0 and VGPR
+#     spills 43 → 20, and made the unrolled variants pass.
+#
+# So: physical lane + a direct `ds_bpermute` at a precomputed index. No activelane, no
+# `wavefrontsize()`, no width arithmetic.
+#
+# Hard-codes wave64, exactly like `_vote(Ballot, …)` below and for the same reason. If RDNA
+# (wave32) support is added, dispatch on the compile-time target arch, NOT on a runtime
+# `wavefrontsize()` check.
+const ROC_WAVE = Int32(64)
 
-const ROC_SHFL_DISPATCH = Dict(
-    Up => :shfl_up,
-    Down => :shfl_down,
-    Xor => :shfl_xor,
-    Idx => :shfl,
+# HIP's __lane_id(): mbcnt over an all-ones mask, so the result is the PHYSICAL lane and is
+# independent of EXEC — hence hoistable and CSE-able, unlike activelane().
+@inline _lane_id() = ccall("llvm.amdgcn.mbcnt.hi", llvmcall, UInt32, (UInt32, UInt32),
+    0xffffffff, ccall("llvm.amdgcn.mbcnt.lo", llvmcall, UInt32, (UInt32, UInt32),
+                      0xffffffff, UInt32(0)))
+@inline _self() = reinterpret(Int32, _lane_id())
+
+# `ds_bpermute` addresses lanes by BYTE offset (lane << 2) and operates on 32 bits, so each
+# base type is bitcast through Int32. Wider types reach us via `_shfl_recurse` (src/warp.jl).
+@inline _bperm(idx::Int32, v::Int32) = AMDGPU.Device.bpermute(idx << 0x2, v)
+
+# Out-of-range source lane returns the lane's own value — the semantics of AMD's shfl_up /
+# shfl_down (and of CUDA's shfl with a full-width segment).
+@inline _shfl_idx_i32(v::Int32, lane::Int32)  = _bperm(lane & (ROC_WAVE - Int32(1)), v)
+@inline function _shfl_up_i32(v::Int32, δ::Int32)
+    self = _self(); idx = self - δ
+    _bperm(ifelse(idx < Int32(0), self, idx), v)
+end
+@inline function _shfl_down_i32(v::Int32, δ::Int32)
+    self = _self(); idx = self + δ
+    _bperm(ifelse(idx >= ROC_WAVE, self, idx), v)
+end
+@inline _shfl_xor_i32(v::Int32, m::Int32) = _bperm(_self() ⊻ m, v)
+
+const ROC_SHFL_IMPL = Dict(
+    Up => :_shfl_up_i32,
+    Down => :_shfl_down_i32,
+    Xor => :_shfl_xor_i32,
 )
 
-for T in (Int32, UInt32, Float32)
-    for (direction, roc_fname) in ROC_SHFL_DISPATCH
-        if direction != Idx
-            @eval begin
-                Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::$T, src) =
-                    AMDGPU.Device.$roc_fname(val, src)
-            end
-        end
-    end
+for (direction, impl) in ROC_SHFL_IMPL
     @eval begin
-        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::$T, src) =
-            AMDGPU.Device.shfl(val, src - Int32(1))
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::Int32, src) =
+            $impl(val, Int32(src))
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::UInt32, src) =
+            reinterpret(UInt32, $impl(reinterpret(Int32, val), Int32(src)))
+        Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::Float32, src) =
+            reinterpret(Float32, $impl(reinterpret(Int32, val), Int32(src)))
     end
 end
+
+# `Idx` takes a 1-based source lane (KernelIntrinsics convention).
+Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::Int32, src) =
+    _shfl_idx_i32(val, Int32(src) - Int32(1))
+Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::UInt32, src) =
+    reinterpret(UInt32, _shfl_idx_i32(reinterpret(Int32, val), Int32(src) - Int32(1)))
+Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::Float32, src) =
+    reinterpret(Float32, _shfl_idx_i32(reinterpret(Int32, val), Int32(src) - Int32(1)))
 
 # ── Vote ──────────────────────────────────────────────────────────────────────
 # AMDGPU does not have a `Uni` primitive (uniform predicate vote) — would have

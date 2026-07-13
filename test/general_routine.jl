@@ -11,6 +11,11 @@ include("backend_hooks.jl")
 
 include("tests/$TEST_BACKEND/access_fences.jl")
 
+# AMD only: the shuffle must address the PHYSICAL lane, not the rank among active lanes.
+# Can't be a cross-backend test — CUDA's `@shfl` lowers to `shfl.sync` with a full mask, so
+# calling it from a divergent branch is undefined there by construction.
+TEST_BACKEND == "roc" && include("tests/roc/shfl_lane.jl")
+
 include("tests/vectorization_test.jl")
 include("tests/shfl.jl")
 include("tests/match.jl")
