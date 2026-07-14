@@ -78,9 +78,15 @@ end
     end
 
     @testset "past the 48 KB static cap" begin
-        ns = 16 * 1024                       # 64 KB of Float32 staging
+        # Size this from the DEVICE cap, not from a constant. A hardcoded 64 KB of staging asks
+        # for 65 KB once the histogram is added — fine on an A100 (164 KB of shared) but 1 KB over
+        # the 64 KB LDS of a CDNA3 part, where the launch guard correctly refuses it. Aim halfway
+        # between the 48 KB static cap and whatever this device actually allows: that is past the
+        # static cap everywhere, and within reach everywhere.
+        target = (48 * 1024 + cap) ÷ 2
+        ns = (target - 256 * sizeof(UInt32)) ÷ sizeof(Float32)
         got, shmem = run_dyn(Float32, 256, ns, 3)
-        @test shmem > 48 * 1024
+        @test 48 * 1024 < shmem <= cap
         @test got == dyn_expected(Float32, 256, ns, 3)
     end
 

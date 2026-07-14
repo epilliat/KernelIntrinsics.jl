@@ -15,8 +15,14 @@ import KernelIntrinsics: _laneid
 # Import parent module and types
 
 
+# Escape the WHOLE call, not the argument. `Base.Experimental.@overlay` runs
+# `macroexpand` on its `def` and then demands a function definition — and `esc(expr)` hands it an
+# `Expr(:escape, …)` wrapping the `@inline function …` macrocall, which macroexpand does not
+# unwrap. It therefore sees an `:escape` node, not a function, and dies with
+# "@overlay requires a function definition". Escaping the enclosing call instead passes the raw
+# macrocall through, which @overlay expands correctly.
 macro amdgpu_overlay(expr)
-    return :(Base.Experimental.@overlay AMDGPU.method_table $(esc(expr)))
+    return esc(:(Base.Experimental.@overlay AMDGPU.method_table $expr))
 end
 
 
