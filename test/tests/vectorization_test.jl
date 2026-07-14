@@ -155,11 +155,13 @@
             v = KernelIntrinsics.vload(a, i, Val(32), Val(true))
             KernelIntrinsics.vstore!(b, i, v, Val(true))
         end
-        for T in (Float64, Int64)
-            a = to_device(T.(1:64)); b = to_device(zeros(T, 64))
-            test_rt_big(backend)(a, b, 2; ndrange=1)  # block 2 = elements 33:64
-            synchronize(backend)
-            @test from_device(b)[33:64] == T.(33:64)
+        if HOOKS.supported.float64
+            for T in (Float64, Int64)
+                a = to_device(T.(1:64)); b = to_device(zeros(T, 64))
+                test_rt_big(backend)(a, b, 2; ndrange=1)  # block 2 = elements 33:64
+                synchronize(backend)
+                @test from_device(b)[33:64] == T.(33:64)
+            end
         end
     end
 end

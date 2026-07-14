@@ -1,6 +1,6 @@
 import KernelIntrinsics: Up, Down, Xor, Idx
-import KernelIntrinsics: All, AnyLane, Uni, Ballot
-import KernelIntrinsics: _shfl, _vote
+import KernelIntrinsics: All, AnyLane, Uni, Ballot, MatchAny
+import KernelIntrinsics: _shfl, _vote, _match
 
 const SHFL_DISPATCH = Dict(
     Up => :(Metal.simd_shuffle_up),
@@ -58,4 +58,29 @@ Base.Experimental.@overlay Metal.method_table @inline function _vote(::Type{Uni}
     active = ccall("extern air.simd_ballot.i64", llvmcall, UInt64, (Bool,), true)
     # Uniform: all active lanes same value (all true OR all false)
     return (bits == active) || (bits == UInt64(0))
+end
+
+# The portable polyfill in src/warp.jl can't be used here: its `@generated`
+# body calls `_vote(Ballot, …)`, but Base.Experimental.@overlay overrides
+# don't propagate into the polyfill body during inference, leaving _match
+# dynamically dispatched (same root cause as the @match failure on AMDGPU).
+# Inline the polyfill body directly into Metal's overlay using the
+# LLVM ballot intrinsic, so type inference stays inside the overlay context.
+
+for T in (UInt8, UInt16, UInt32, UInt64)
+    Nbits = 8 * sizeof(T)
+    body = Expr(:block,
+        :(active = ccall("extern air.simd_ballot.i64", llvmcall, UInt64, (Bool,), true)),
+        :(result = active),
+    )
+    for b in 1:Nbits
+        push!(body.args, quote
+            let bit_b = ((value >> $(b - 1)) & one($T)) != zero($T)
+                ballot_b = ccall("extern air.simd_ballot.i64", llvmcall, UInt64, (Bool,), bit_b)
+                result &= bit_b ? ballot_b : (active & ~ballot_b)
+            end
+        end)
+    end
+    push!(body.args, :(return result))
+    @eval Base.Experimental.@overlay Metal.method_table @inline _match(::Type{MatchAny}, mask, value::$T) = $body
 end
