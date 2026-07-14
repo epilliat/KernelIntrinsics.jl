@@ -145,6 +145,36 @@ struct MatchAny <: MatchMode end
 # --- Implementation ---
 
 function _shfl end
+
+"""
+    shfl_at(Direction, val, src, lane, Val(warpsize))
+
+Shuffle `val` like [`@shfl`](@ref), except the caller supplies **its own PHYSICAL lane**
+(1-based) instead of letting the backend rederive it from the hardware.
+
+!!! warning "`lane` MUST be the physical lane"
+    This is the whole contract. `lane` is used as the SHUFFLE INDEX, so it has to be this
+    thread's actual lane within the wavefront — `(local_index - 1) % warpsize + 1`, or
+    [`@laneid`](@ref).
+
+    In particular it is **not** interchangeable with the `lane` argument of
+    [`@warpreduce`](@ref), which is only a *guard* index and is allowed to be segment-local: a
+    32-wide segmented scan on a 64-wide wave passes a lane in `1:32` and relies on the shuffle
+    still moving data by physical lane. Handing such a lane to `shfl_at` would make the upper
+    half of the wave read the lower half's values.
+
+Why it exists: on AMD the backend otherwise recomputes the lane with two `mbcnt` at every
+shuffle, and the kernel ends up holding two live registers for the same value. Passing the lane
+in removed a 12-VGPR scratch spill and ~3.5% from KernelForge's F64 scan on MI300A.
+
+On CUDA there is nothing to save — `shfl.sync` takes the delta and the hardware derives the lane
+— so the generic definition below simply ignores `lane` and forwards to `_shfl`. Identical code,
+no regression, and no gain either: this is an AMD-side optimisation.
+
+Only `Up` and `Down` are specialised; any other direction falls through to `_shfl`.
+"""
+@inline shfl_at(::Type{D}, val, src, lane, ::Val{ws}) where {D,ws} =
+    _shfl(D, 0xffffffff, val, src)
 function _vote end
 function _match end
 

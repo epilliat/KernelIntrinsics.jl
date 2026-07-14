@@ -2,7 +2,7 @@
 import KernelIntrinsics: Up, Down, Xor, Idx
 import KernelIntrinsics: All, AnyLane, Uni, Ballot
 import KernelIntrinsics: MatchAny
-import KernelIntrinsics: _shfl, _vote, _match
+import KernelIntrinsics: _shfl, _shfl_recurse, shfl_at, _vote, _match
 using Base.Cartesian: @nexprs
 
 # ── Shuffle ───────────────────────────────────────────────────────────────────
@@ -72,6 +72,53 @@ for (direction, impl) in ROC_SHFL_IMPL
         Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::Float32, src) =
             reinterpret(Float32, $impl(reinterpret(Int32, val), Int32(src)))
     end
+end
+
+# ── shfl_at: the caller hands us its PHYSICAL lane ───────────────────────────
+# Same permute; we just skip rederiving the lane. `@warpreduce` cannot use this — its `lane` may
+# be segment-local (see the shfl_at docstring) — so it is an explicit opt-in for callers that
+# know their lane is the hardware one. On KernelForge's F64 scan that removed a 12-VGPR scratch
+# spill and ~3.5%: without it the kernel holds its own lane AND the mbcnt-derived one.
+#
+# Written out method by method rather than generated in a loop: `Base.Experimental.@overlay` has
+# to see a literal function definition, and it rejects one that reaches it through @eval with a
+# `where` clause ("@overlay requires a function definition").
+@inline function _idx_up_at(δ::Int32, lane::Int32)
+    self = lane - Int32(1); idx = self - δ
+    ifelse(idx < Int32(0), self, idx)
+end
+@inline function _idx_down_at(δ::Int32, lane::Int32, ws::Int32)
+    self = lane - Int32(1); idx = self + δ
+    ifelse(idx >= ws, self, idx)
+end
+
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Up}, val::Int32, src, lane, ::Val{ws}) where {ws}
+    _bperm(_idx_up_at(Int32(src), Int32(lane)), val)
+end
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Up}, val::UInt32, src, lane, ::Val{ws}) where {ws}
+    reinterpret(UInt32, _bperm(_idx_up_at(Int32(src), Int32(lane)), reinterpret(Int32, val)))
+end
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Up}, val::Float32, src, lane, ::Val{ws}) where {ws}
+    reinterpret(Float32, _bperm(_idx_up_at(Int32(src), Int32(lane)), reinterpret(Int32, val)))
+end
+# Wider types (Float64/Int64/composites) split into 32-bit halves. This MUST recurse through
+# `shfl_at`, not `_shfl`: the generic fallback drops the lane, and a Float64 warp scan is
+# precisely what the lane was added for.
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Up}, val, src, lane, ::Val{ws}) where {ws}
+    _shfl_recurse(x -> shfl_at(Up, x, src, lane, Val(ws)), val)
+end
+
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Down}, val::Int32, src, lane, ::Val{ws}) where {ws}
+    _bperm(_idx_down_at(Int32(src), Int32(lane), Int32(ws)), val)
+end
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Down}, val::UInt32, src, lane, ::Val{ws}) where {ws}
+    reinterpret(UInt32, _bperm(_idx_down_at(Int32(src), Int32(lane), Int32(ws)), reinterpret(Int32, val)))
+end
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Down}, val::Float32, src, lane, ::Val{ws}) where {ws}
+    reinterpret(Float32, _bperm(_idx_down_at(Int32(src), Int32(lane), Int32(ws)), reinterpret(Int32, val)))
+end
+Base.Experimental.@overlay AMDGPU.method_table @inline function shfl_at(::Type{Down}, val, src, lane, ::Val{ws}) where {ws}
+    _shfl_recurse(x -> shfl_at(Down, x, src, lane, Val(ws)), val)
 end
 
 # `Idx` takes a 1-based source lane (KernelIntrinsics convention).

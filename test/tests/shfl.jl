@@ -164,6 +164,46 @@ end
 
     end  # @shfl
 
+    # ── shfl_at ───────────────────────────────────────────────────────────────
+    # Same permute as @shfl, with the caller supplying its own physical lane. So the ONE thing
+    # that must hold is: given the physical lane, it agrees with @shfl exactly. Anything else is
+    # a silently wrong shuffle.
+    @testset "shfl_at agrees with @shfl at the physical lane" begin
+        @kernel function shfl_at_up(dst, src, delta, ::Val{ws}) where {ws}
+            I = @index(Global, Linear)
+            lane = (I - 1) % ws + 1
+            dst[I] = shfl_at(KI.Up, src[I], delta, lane, Val(ws))
+        end
+        @kernel function shfl_at_down(dst, src, delta, ::Val{ws}) where {ws}
+            I = @index(Global, Linear)
+            lane = (I - 1) % ws + 1
+            dst[I] = shfl_at(KI.Down, src[I], delta, lane, Val(ws))
+        end
+        @kernel function shfl_up_ref(dst, src, delta)
+            I = @index(Global, Linear)
+            dst[I] = @shfl(Up, src[I], delta)
+        end
+        @kernel function shfl_down_ref(dst, src, delta)
+            I = @index(Global, Linear)
+            dst[I] = @shfl(Down, src[I], delta)
+        end
+
+        # Float64 matters most: it is the type the lane was added for, and it takes the
+        # `_shfl_recurse` path, which must recurse through shfl_at and not drop the lane.
+        for T in (Int32, Float32, Float64), delta in (1, 2, 8)
+            data = T.(1:warpsz)
+            src = to_device(data)
+            got_up, ref_up = to_device(zeros(T, warpsz)), to_device(zeros(T, warpsz))
+            got_dn, ref_dn = to_device(zeros(T, warpsz)), to_device(zeros(T, warpsz))
+            launch(shfl_at_up, got_up, src, Int32(delta), Val(warpsz); ndrange=warpsz)
+            launch(shfl_up_ref, ref_up, src, Int32(delta); ndrange=warpsz)
+            launch(shfl_at_down, got_dn, src, Int32(delta), Val(warpsz); ndrange=warpsz)
+            launch(shfl_down_ref, ref_dn, src, Int32(delta); ndrange=warpsz)
+            @test from_device(got_up) == from_device(ref_up)
+            @test from_device(got_dn) == from_device(ref_dn)
+        end
+    end
+
     # ── @warpreduce ───────────────────────────────────────────────────────────
     @testset "@warpreduce" begin
 

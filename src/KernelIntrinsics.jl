@@ -8,6 +8,7 @@ export @fence, @access
 export vload, vstore!
 
 export @shfl, @warpreduce, @warpfold, @vote, @match
+export shfl_at
 export MatchAny
 export @sleep
 export @dynlocalmem, launch!, max_dynamic_localmem
