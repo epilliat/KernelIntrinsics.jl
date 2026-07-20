@@ -66,6 +66,21 @@ run_kloop(cfg, C, A, B, fillv, Kb) =
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0e-12
         end
 
+        # ── Entiers : Int8→Int32 (fallback partout, MFMA sur MI300). Arithmétique
+        #    exacte ⇒ on compare avec == , pas ≈. Régression : le produit doit se
+        #    faire en Int32, sinon Int8*Int8 déborde.
+        # K=32 : c'est la forme i8 de gfx942 (le K=16 y est absent). Sur CUDA le
+        # fallback encaisse n'importe quel K, donc le même test couvre les deux.
+        @testset "GEMM Int8→Int32 16×16×32 (MFMA/fallback)" begin
+            Ki = 32
+            A = to_device(rand(Int8(-100):Int8(100), M, Ki))
+            B = to_device(rand(Int8(-100):Int8(100), Ki, N))
+            C = to_device(zeros(Int32, M, N))
+            cfg = MMA.MMAConfig{M,N,Ki,Int8,Int32,MMA.MulAdd}()
+            run_tile(cfg, C, A, B, Int32(0))
+            @test from_device(C) == Int32.(from_device(A)) * Int32.(from_device(B))
+        end
+
         # ── Structure complexe : ComplexF32 (fallback-only, via muladd) ──
         @testset "fallback GEMM (MulAdd, ComplexF32)" begin
             A = to_device(rand(ComplexF32, M, K)); B = to_device(rand(ComplexF32, K, N))

@@ -209,7 +209,11 @@ end
         ni = (idx0 - 1) ÷ Mr
         e = :(c.x[$idx0])
         for k in 0:(K - 1)
-            e = :(acc($OP(), a.x[$(mi + Mr * k + 1)], b.x[$(k + K * ni + 1)], $e))
+            # Les opérandes sont promus dans le TYPE D'ACCUMULATION avant le produit.
+            # Sans ça, `Int8 * Int8` se fait en Int8 et déborde dès que le produit
+            # dépasse 127 — alors que le hardware (MFMA i8) accumule en i32. Pour les
+            # flottants c'est déjà le comportement de la promotion, donc sans effet.
+            e = :(acc($OP(), $AccT(a.x[$(mi + Mr * k + 1)]), $AccT(b.x[$(k + K * ni + 1)]), $e))
         end
         outs[idx0] = e
     end
