@@ -9,8 +9,7 @@
 # les layouts diffèrent réellement d'une op à l'autre (cf. blocked vs interleaved
 # ci-dessous, découvert à l'exécution). Ne jamais les supposer.
 #
-# TODO : fp8/bf8 (4 combos), formes K plus larges (16×16×32 i8, i64 packé),
-#        SMFMAC (sparse), RDNA3 wave32/WMMA.
+# TODO : fp8/bf8 (4 combos), 32×32×16 i8, SMFMAC (sparse), RDNA3 wave32/WMMA.
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported
@@ -41,22 +40,34 @@ end
 #       :blk4        → m = 8*(j÷4) + 4*g + j%4        (famille 32×32)
 #   ST = type de STOCKAGE de l'opérande vu par l'intrinsic. Peut différer de CT :
 #        - bf16 : LLVM le prend en <4 x i16>            ⇒ ST=Int16, reinterpret
-#        - i8   : 4 int8 PACKÉS dans un i32             ⇒ ST=Int32, packing
+#        - i8   : 8 int8 PACKÉS dans un i64             ⇒ ST=Int64, packing
 #        Le facteur de packing pk = sizeof(ST)÷sizeof(CT) est déduit, pas stocké.
 #   na = éléments de CT par lane ; nw = na÷pk mots ST réellement passés.
+#   archs = architectures GCN où l'op EXISTE. MFMA est propre à CDNA — sur RDNA il
+#        n'y a rien de tout ça. Seul **gfx942 est validé ici** ; les autres noms
+#        viennent de l'ISA CDNA. Se tromper ne peut que produire une erreur de
+#        compilation bruyante (« Cannot select »), jamais des chiffres faux.
+const _CDNA1 = ("gfx908", "gfx90a", "gfx942", "gfx950")   # MFMA de base
+const _CDNA2 = ("gfx90a", "gfx942", "gfx950")             # + bf16 .1k, f64
+const _CDNA3 = ("gfx942", "gfx950")                       # + i8 K=32
+
 const _MFMA_OPS = (
-    # (M, N, K, CT, AccT, ST, intrinsic, na, nc, acc_layout)
-    (16, 16, 16, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.16x16x16f16", 4, 4, :blocked),
-    (16, 16, 4, Float64, Float64, Float64, "llvm.amdgcn.mfma.f64.16x16x4f64", 1, 4, :interleaved),
-    (32, 32, 8, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.32x32x8f16", 4, 16, :blk4),
-    (16, 16, 16, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.16x16x16bf16.1k", 4, 4, :blocked),
-    (32, 32, 8, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.32x32x8bf16.1k", 4, 16, :blk4),
+    # (M, N, K, CT, AccT, ST, intrinsic, na, nc, acc_layout, archs)
+    (16, 16, 16, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.16x16x16f16", 4, 4, :blocked, _CDNA1),
+    (16, 16, 4, Float64, Float64, Float64, "llvm.amdgcn.mfma.f64.16x16x4f64", 1, 4, :interleaved, _CDNA2),
+    (32, 32, 8, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.32x32x8f16", 4, 16, :blk4, _CDNA1),
+    (16, 16, 16, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.16x16x16bf16.1k", 4, 4, :blocked, _CDNA2),
+    (32, 32, 8, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.32x32x8bf16.1k", 4, 16, :blk4, _CDNA2),
     # gfx942 a REMPLACÉ le i8 K=16 (gfx908/90a) par K=32 à opérandes i64 : le
     # `mfma.i32.16x16x16i8` existe dans LLVM mais finit en « Cannot select » ici.
-    (16, 16, 32, Int8, Int32, Int64, "llvm.amdgcn.mfma.i32.16x16x32.i8", 8, 4, :blocked),
+    (16, 16, 32, Int8, Int32, Int64, "llvm.amdgcn.mfma.i32.16x16x32.i8", 8, 4, :blocked, _CDNA3),
 )
 
-for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay) in _MFMA_OPS
+# Architecture GCN du device courant, suffixes de features retirés
+# ("gfx942:sramecc+:xnack-" → "gfx942").
+_gfx() = first(split(AMDGPU.device().gcn_arch, ':'))
+
+for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
     pk = sizeof(ST) ÷ sizeof(CT)                    # éléments CT par mot ST
     nw = na ÷ pk                                    # mots ST par lane
     AV = nw == 1 ? ST : NTuple{nw,VecElement{ST}}   # type d'opérande vu par l'intrinsic
@@ -153,7 +164,11 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay) in _MFMA_OPS
             nothing
         end
 
-        # Query hôte. TODO : gater sur l'isa réelle (gfx942) plutôt qu'inconditionnel.
-        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) = true
+        # Query hôte : gatée sur l'ARCHITECTURE RÉELLE du device (MFMA = CDNA only).
+        # ⚠️ Les overrides device ci-dessus, eux, sont inconditionnels : appeler une
+        # config sur une archi qui ne l'a pas échoue à la COMPILATION (« Cannot
+        # select ») au lieu de retomber sur le fallback. `mma_supported` est donc le
+        # garde-fou que l'appelant doit interroger avant de choisir sa tuile.
+        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) = _gfx() in $ARCHS
     end
 end
