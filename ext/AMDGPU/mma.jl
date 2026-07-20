@@ -25,10 +25,10 @@ end
 
 @inline _lane0() = Int(AMDGPU.Device.activelane())   # lane 0..63
 
-@inline function _base(A, idx)
-    ld = size(A, 1); b0 = idx - 1
-    return (b0 % ld, b0 ÷ ld)
-end
+# L'origine de tuile arrive DÉJÀ décodée en (row, col) 1-based depuis src/mma.jl :
+# plus de `b0 % ld` / `b0 ÷ ld` ici, donc plus de division entière à l'exécution
+# dans la boucle-K. Simples décalages 1-based → 0-based.
+@inline _base(row, col) = (row - 1, col - 1)
 
 # Table des intrinsics MFMA supportés.
 #   nc = éléments accumulateur par lane.
@@ -127,8 +127,8 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
 
         @inline _operand(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, f::MFMAFrag) = $unwrap
 
-        @amdgpu_overlay @inline function _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, idx, ::Type{ColMajor})
-            r0, c0 = _base(A, idx); lane = _lane0()
+        @amdgpu_overlay @inline function _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{ColMajor})
+            r0, c0 = _base(row, col); lane = _lane0()
             m = lane % $M; g = lane ÷ $M
             x = ntuple(Val($nw)) do e
                 @inbounds VecElement($rdA)
@@ -136,8 +136,8 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
             MFMAFrag{MatrixA,$nw,$ST}(x)
         end
 
-        @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, idx, ::Type{ColMajor})
-            r0, c0 = _base(B, idx); lane = _lane0()
+        @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{ColMajor})
+            r0, c0 = _base(row, col); lane = _lane0()
             n = lane % $N; g = lane ÷ $N
             x = ntuple(Val($nw)) do e
                 @inbounds VecElement($rdB)
@@ -145,8 +145,8 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
             MFMAFrag{MatrixB,$nw,$ST}(x)
         end
 
-        @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx, ::Type{ColMajor})
-            r0, c0 = _base(C, idx); lane = _lane0()
+        @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{ColMajor})
+            r0, c0 = _base(row, col); lane = _lane0()
             # g est l'index de GROUPE dans la partition par colonne (n = lane % N),
             # donc lane ÷ N — pas ÷ M. Les deux coïncidaient tant que la table ne
             # contenait que des formes carrées ; latent pour toute forme M ≠ N.
@@ -167,9 +167,9 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
             MFMAFrag{Accumulator,$nc,$AccT}(_mfma_call(cfg, _operand(cfg, a), _operand(cfg, b), c.x))
         end
 
-        @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx,
+        @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
                                                    d::MFMAFrag{Accumulator}, ::Type{ColMajor})
-            r0, c0 = _base(C, idx); lane = _lane0()
+            r0, c0 = _base(row, col); lane = _lane0()
             n = lane % $N; g = lane ÷ $N     # cf. _load_c : ÷ N, pas ÷ M
             for e in 1:$nc
                 j = e - 1

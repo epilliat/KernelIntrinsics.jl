@@ -19,6 +19,11 @@ using CUDA: WMMA
 @inline _wmma_layout(::Type{RowMajor}) = WMMA.RowMajor
 @inline _wmma_layout(::Type{ColMajor}) = WMMA.ColMajor
 
+# WMMA veut un POINTEUR ; l'API interne parle en (row, col) 1-based. Le ré-encodage
+# col-major est une multiplication — pas la division que coûtait le décodage
+# inverse dans l'autre sens.
+@inline _lin(A, row, col) = (col - 1) * size(A, 1) + row
+
 # (type calcul CT, type accumulation AccT, capability minimale, formes supportées).
 # Les formes dépendent du TYPE, pas seulement du backend : CUDA.jl ne gère bf16
 # qu'en 16×16×16 (ses tables de taille de fragment ne couvrent pas les formes
@@ -43,14 +48,14 @@ const _WMMA_TYPES = (
 # Lier les littéraux rend la dégradation gracieuse : forme inconnue ⇒ fallback.
 for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
     @eval begin
-        CUDA.@device_override @inline _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, idx, ::Type{L}) where {L} =
-            WMMA.load_a(pointer(A, idx), size(A, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
+        CUDA.@device_override @inline _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{L}) where {L} =
+            WMMA.load_a(pointer(A, _lin(A, row, col)), size(A, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, idx, ::Type{L}) where {L} =
-            WMMA.load_b(pointer(B, idx), size(B, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
+        CUDA.@device_override @inline _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{L}) where {L} =
+            WMMA.load_b(pointer(B, _lin(B, row, col)), size(B, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx, ::Type{L}) where {L} =
-            WMMA.load_c(pointer(C, idx), size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
+        CUDA.@device_override @inline _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{L}) where {L} =
+            WMMA.load_c(pointer(C, _lin(C, row, col)), size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
         CUDA.@device_override @inline _fill_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
             WMMA.fill_c($AccT(v), WMMA.Config{$M,$N,$K,$AccT})
@@ -59,9 +64,9 @@ for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
                                            a::WMMA.Fragment, b::WMMA.Fragment, c::WMMA.Fragment) =
             WMMA.mma(a, b, c, WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx,
+        CUDA.@device_override @inline _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
                                                 d::WMMA.Fragment, ::Type{L}) where {L} =
-            WMMA.store_d(pointer(C, idx), d, size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
+            WMMA.store_d(pointer(C, _lin(C, row, col)), d, size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
         # Query hôte : gatée sur la capability RÉELLE du device (cf. le côté AMD,
         # gaté sur _gfx()). Une forme tabulée ne suffit pas — encore faut-il que

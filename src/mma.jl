@@ -28,6 +28,7 @@ export MatrixA, MatrixB, Accumulator, RowMajor, ColMajor
 export MulAdd, Tropical
 export load_a, load_b, load_c, fill_c, mma, store_d!
 export mma_supported
+export mma_shape, compute_type, acc_type, acc_identity
 
 # ── Tags ────────────────────────────────────────────────────────────────────
 abstract type MatrixUse end
@@ -61,6 +62,16 @@ struct Tropical <: AccOp end     # semi-anneau max-plus : max(a+b, c)
 struct MMAConfig{M,N,K,CT,AccT,OP} end
 (::Type{MMAConfig{M,N,K,CT,AccT}})() where {M,N,K,CT,AccT} = MMAConfig{M,N,K,CT,AccT,MulAdd}()
 
+# ── Accesseurs de config ─────────────────────────────────────────────────────
+# Sans eux, un kernel générique en `cfg` ne peut ni dimensionner sa mémoire
+# partagée ni typer ses tampons : il devrait re-déclarer M,N,K,… en paramètres,
+# ce qui annule l'intérêt de porter la config comme un seul objet. Tout est
+# résolu à la compilation (paramètres de type ⇒ constantes).
+@inline mma_shape(::MMAConfig{M,N,K}) where {M,N,K} = (M = M, N = N, K = K)
+@inline compute_type(::MMAConfig{M,N,K,CT}) where {M,N,K,CT} = CT
+@inline acc_type(::MMAConfig{M,N,K,CT,AccT}) where {M,N,K,CT,AccT} = AccT
+@inline acc_op(::MMAConfig{M,N,K,CT,AccT,OP}) where {M,N,K,CT,AccT,OP} = OP()
+
 # ── Fragment opaque du FALLBACK (NTuple interne, layout non exposé) ──────────
 # Le chemin HW renvoie SON propre type de fragment (WMMA.Fragment, …) ; le
 # dispatch de `mma`/`store_d!` se fait sur le type de fragment.
@@ -68,13 +79,43 @@ struct Frag{Use<:MatrixUse,T,L}
     x::NTuple{L,T}
 end
 
+# Identité additive de l'opérateur porté par la config — valeur de remplissage
+# naturelle de l'accumulateur : `fill_c(cfg, acc_identity(cfg))` est le neutre,
+# quel que soit le semi-anneau (0 pour MulAdd, -Inf pour Tropical).
+@inline acc_identity(cfg::MMAConfig) = acc_identity(acc_op(cfg), acc_type(cfg))
+
 # ── API publique → stubs surchargeables par backend (fallback par défaut) ────
-@inline load_a(cfg::MMAConfig, A, idx, layout) = _load_a(cfg, A, idx, layout)
-@inline load_b(cfg::MMAConfig, B, idx, layout) = _load_b(cfg, B, idx, layout)
-@inline load_c(cfg::MMAConfig, C, idx, layout) = _load_c(cfg, C, idx, layout)
-@inline fill_c(cfg::MMAConfig, v)              = _fill_c(cfg, v)
-@inline mma(cfg::MMAConfig, a, b, c)           = _mma(cfg, a, b, c)
-@inline store_d!(cfg::MMAConfig, C, idx, d, layout) = _store_d!(cfg, C, idx, d, layout)
+#
+# DEUX points d'entrée, même sémantique :
+#   • (row, col) — origine de la tuile en coordonnées 1-based. Forme PRIVILÉGIÉE.
+#   • idx        — index linéaire 1-based (col-major), conservé pour compat.
+#
+# Le (row, col) n'est pas seulement du confort d'appel (il supprime le
+# `1 + kb*16*size(A,1)` chez l'appelant) : il supprime surtout DEUX DIVISIONS
+# ENTIÈRES à l'exécution par chargement de fragment. La forme linéaire doit
+# décoder `r0 = b0 % ld ; c0 = b0 ÷ ld` avec `ld` connu seulement à l'exécution —
+# une vraie division GPU, dans la boucle-K, sur le chemin chaud. En partant de
+# (row, col) le décodage n'existe pas ; c'est la forme linéaire qui paie, et
+# seulement elle. Les stubs internes prennent donc (row, col) comme forme
+# canonique et la variante linéaire n'est qu'un adaptateur.
+@inline function _rowcol(A, idx)
+    ld = size(A, 1); b0 = idx - 1
+    return (b0 % ld + 1, b0 ÷ ld + 1)
+end
+
+@inline load_a(cfg::MMAConfig, A, row, col, layout) = _load_a(cfg, A, row, col, layout)
+@inline load_b(cfg::MMAConfig, B, row, col, layout) = _load_b(cfg, B, row, col, layout)
+@inline load_c(cfg::MMAConfig, C, row, col, layout) = _load_c(cfg, C, row, col, layout)
+@inline store_d!(cfg::MMAConfig, C, row, col, d, layout) = _store_d!(cfg, C, row, col, d, layout)
+
+@inline load_a(cfg::MMAConfig, A, idx, layout) = ((r, c) = _rowcol(A, idx); _load_a(cfg, A, r, c, layout))
+@inline load_b(cfg::MMAConfig, B, idx, layout) = ((r, c) = _rowcol(B, idx); _load_b(cfg, B, r, c, layout))
+@inline load_c(cfg::MMAConfig, C, idx, layout) = ((r, c) = _rowcol(C, idx); _load_c(cfg, C, r, c, layout))
+@inline store_d!(cfg::MMAConfig, C, idx, d, layout) =
+    ((r, c) = _rowcol(C, idx); _store_d!(cfg, C, r, c, d, layout))
+
+@inline fill_c(cfg::MMAConfig, v)    = _fill_c(cfg, v)
+@inline mma(cfg::MMAConfig, a, b, c) = _mma(cfg, a, b, c)
 
 """
     mma_supported(cfg::MMAConfig) -> Bool
@@ -111,19 +152,21 @@ function _lane_grid(M, N, WS)
     return (best[1], best[2])
 end
 
-@inline _load_a(cfg::MMAConfig, A, idx, layout) = _load_a_fb(cfg, A, idx, layout, _mma_wave())
-@inline _load_b(cfg::MMAConfig, B, idx, layout) = _load_b_fb(cfg, B, idx, layout, _mma_wave())
-@inline _load_c(cfg::MMAConfig, C, idx, layout) = _load_c_fb(cfg, C, idx, layout, _mma_wave())
-@inline _fill_c(cfg::MMAConfig, v)              = _fill_c_fb(cfg, v, _mma_wave())
+@inline _load_a(cfg::MMAConfig, A, row, col, layout) = _load_a_fb(cfg, A, row, col, layout, _mma_wave())
+@inline _load_b(cfg::MMAConfig, B, row, col, layout) = _load_b_fb(cfg, B, row, col, layout, _mma_wave())
+@inline _load_c(cfg::MMAConfig, C, row, col, layout) = _load_c_fb(cfg, C, row, col, layout, _mma_wave())
+@inline _fill_c(cfg::MMAConfig, v)                   = _fill_c_fb(cfg, v, _mma_wave())
 @inline _mma(cfg::MMAConfig, a::Frag{MatrixA}, b::Frag{MatrixB}, c::Frag{Accumulator}) =
     _mma_fb(cfg, a, b, c, _mma_wave())
-@inline _store_d!(cfg::MMAConfig, C, idx, d::Frag{Accumulator}, layout) =
-    _store_d_fb!(cfg, C, idx, d, layout, _mma_wave())
+@inline _store_d!(cfg::MMAConfig, C, row, col, d::Frag{Accumulator}, layout) =
+    _store_d_fb!(cfg, C, row, col, d, layout, _mma_wave())
 
-# Décodage tuile-origine (col-major) : idx linéaire 1-based → (row0, col0). Émis
-# dans le prologue de chaque @generated.
+# Les corps ci-dessous reçoivent l'origine de tuile DÉJÀ décodée en (row, col)
+# 1-based ; `r0 = row - 1`, `c0 = col - 1` sont de simples décalages. C'est la
+# variante linéaire de l'API publique qui porte le coût du décodage, quand elle
+# est utilisée.
 # load_a : lane possède ses lignes (op_y + mb·mi), toutes les colonnes K.
-@generated function _load_a_fb(::MMAConfig{M,N,K,CT,AccT,OP}, A, idx, ::Type{ColMajor},
+@generated function _load_a_fb(::MMAConfig{M,N,K,CT,AccT,OP}, A, row, col, ::Type{ColMajor},
                                ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
     mb, _ = _lane_grid(M, N, WS)
     Mr = M ÷ mb
@@ -135,15 +178,14 @@ end
         els[i] = :($CT(@inbounds A[r0 + op_y + $(mb * mi) + 1, c0 + $k + 1]))
     end
     quote
-        ld = size(A, 1); b0 = idx - 1
-        r0 = b0 % ld; c0 = b0 ÷ ld
+        r0 = row - 1; c0 = col - 1
         op_y = (_laneid() - 1) % $mb
         Frag{MatrixA,$CT,$L}(($(els...),))
     end
 end
 
 # load_b : lane possède ses colonnes (op_x + nb·ni), toutes les lignes K.
-@generated function _load_b_fb(::MMAConfig{M,N,K,CT,AccT,OP}, B, idx, ::Type{ColMajor},
+@generated function _load_b_fb(::MMAConfig{M,N,K,CT,AccT,OP}, B, row, col, ::Type{ColMajor},
                                ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
     mb, nb = _lane_grid(M, N, WS)
     Nc = N ÷ nb
@@ -155,15 +197,14 @@ end
         els[j] = :($CT(@inbounds B[r0 + $k + 1, c0 + op_x + $(nb * ni) + 1]))
     end
     quote
-        ld = size(B, 1); b0 = idx - 1
-        r0 = b0 % ld; c0 = b0 ÷ ld
+        r0 = row - 1; c0 = col - 1
         op_x = (_laneid() - 1) ÷ $mb
         Frag{MatrixB,$CT,$L}(($(els...),))
     end
 end
 
 # load_c : lit l'accumulateur depuis la mémoire (mêmes indices que store_d!).
-@generated function _load_c_fb(::MMAConfig{M,N,K,CT,AccT,OP}, C, idx, ::Type{ColMajor},
+@generated function _load_c_fb(::MMAConfig{M,N,K,CT,AccT,OP}, C, row, col, ::Type{ColMajor},
                                ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
     mb, nb = _lane_grid(M, N, WS)
     Mr = M ÷ mb; Nc = N ÷ nb; L = Mr * Nc
@@ -174,8 +215,7 @@ end
         els[idx0] = :($AccT(@inbounds C[r0 + op_y + $(mb * mi) + 1, c0 + op_x + $(nb * ni) + 1]))
     end
     quote
-        ld = size(C, 1); b0 = idx - 1
-        r0 = b0 % ld; c0 = b0 ÷ ld
+        r0 = row - 1; c0 = col - 1
         op_y = (_laneid() - 1) % $mb
         op_x = (_laneid() - 1) ÷ $mb
         Frag{Accumulator,$AccT,$L}(($(els...),))
@@ -223,7 +263,7 @@ end
 end
 
 # store_d! : chaque lane écrit son sous-bloc (op_y+mb·mi, op_x+nb·ni).
-@generated function _store_d_fb!(::MMAConfig{M,N,K,CT,AccT,OP}, C, idx, d::Frag{Accumulator},
+@generated function _store_d_fb!(::MMAConfig{M,N,K,CT,AccT,OP}, C, row, col, d::Frag{Accumulator},
                                  ::Type{ColMajor}, ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
     mb, nb = _lane_grid(M, N, WS)
     Mr = M ÷ mb; Nc = N ÷ nb
@@ -233,8 +273,7 @@ end
                          d.x[$(mi + Mr * ni + 1)]))
     end
     quote
-        ld = size(C, 1); b0 = idx - 1
-        r0 = b0 % ld; c0 = b0 ÷ ld
+        r0 = row - 1; c0 = col - 1
         op_y = (_laneid() - 1) % $mb
         op_x = (_laneid() - 1) ÷ $mb
         $(sts...)

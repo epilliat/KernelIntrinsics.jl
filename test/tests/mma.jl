@@ -40,11 +40,41 @@ end
 run_kloop(cfg, C, A, B, fillv, Kb) =
     (mma_kloop!(backend, Int(warpsz))(cfg, C, A, B, fillv, Val(Kb); ndrange = Int(warpsz)); synchronize(backend))
 
+# Même GEMM, mais via le point d'entrée (row, col) : l'origine de tuile s'écrit
+# directement, sans le `1 + kb*16*size(A,1)` — et sans les divisions entières que
+# le décodage de l'index linéaire impose à l'exécution. `acc_identity(cfg)` donne
+# le neutre de l'opérateur porté par la config, et `mma_shape` évite de re-passer
+# K en paramètre : le kernel est générique en `cfg`.
+@kernel function mma_kloop_rc!(cfg, C, A, B, ::Val{Kb}) where {Kb}
+    Ktile = MMA.mma_shape(cfg).K
+    c = MMA.fill_c(cfg, MMA.acc_identity(cfg))
+    for kb in 0:(Kb - 1)
+        a = MMA.load_a(cfg, A, 1, 1 + kb * Ktile, MMA.ColMajor)
+        b = MMA.load_b(cfg, B, 1 + kb * Ktile, 1, MMA.ColMajor)
+        c = MMA.mma(cfg, a, b, c)
+    end
+    MMA.store_d!(cfg, C, 1, 1, c, MMA.ColMajor)
+end
+
+run_kloop_rc(cfg, C, A, B, Kb) =
+    (mma_kloop_rc!(backend, Int(warpsz))(cfg, C, A, B, Val(Kb); ndrange = Int(warpsz)); synchronize(backend))
+
 @testset "MMA" begin
     # Fallback : warpsize 32 (CUDA/RDNA/Metal) ou 64 (CDNA/MI300, via l'override
     # _mma_wave dans l'ext AMDGPU). Le lane-grid s'adapte à la warpsize.
     if warpsz in (32, 64)
         M = N = K = 16
+
+        # ── Accesseurs de config (hôte, tout à la compilation) ──
+        @testset "accesseurs de config" begin
+            cfg = MMA.MMAConfig{8,32,16,Float16,Float32,MMA.MulAdd}()
+            @test MMA.mma_shape(cfg) === (M = 8, N = 32, K = 16)
+            @test MMA.compute_type(cfg) === Float16
+            @test MMA.acc_type(cfg) === Float32
+            @test MMA.acc_identity(cfg) === 0.0f0
+            # L'identité SUIT l'opérateur : neutre de max-plus = -Inf, pas 0.
+            @test MMA.acc_identity(MMA.MMAConfig{16,16,16,Float32,Float32,MMA.Tropical}()) === -Inf32
+        end
 
         # ── Fallback portable (régime correction), Float32 : pas de path HW ──
         @testset "fallback GEMM (MulAdd, Float32)" begin
@@ -122,6 +152,30 @@ run_kloop(cfg, C, A, B, fillv, Kb) =
             cfg = MMA.MMAConfig{M,N,16,Float32,Float32,MMA.MulAdd}()
             run_kloop(cfg, C, A, B, 0.0f0, Kb)
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
+        end
+
+        # ── Point d'entrée (row, col) : MÊME résultat que la forme linéaire,
+        #    sur le fallback comme sur le hardware. Vérifie que les deux entrées
+        #    ne divergent pas et que acc_identity/mma_shape pilotent le kernel.
+        @testset "boucle-K via (row, col) (fp32, fallback)" begin
+            Kb = 4; Kfull = 16 * Kb
+            A = to_device(rand(Float32, M, Kfull)); B = to_device(rand(Float32, Kfull, N))
+            C = to_device(zeros(Float32, M, N))
+            cfg = MMA.MMAConfig{M,N,16,Float32,Float32,MMA.MulAdd}()
+            run_kloop_rc(cfg, C, A, B, Kb)
+            @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
+        end
+
+        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+            @testset "boucle-K via (row, col) (fp16→fp32, HW)" begin
+                Kb = 4; Kfull = 16 * Kb
+                A = to_device(rand(Float16, M, Kfull)); B = to_device(rand(Float16, Kfull, N))
+                C = to_device(zeros(Float32, M, N))
+                cfg = MMA.MMAConfig{M,N,16,Float16,Float32,MMA.MulAdd}()
+                run_kloop_rc(cfg, C, A, B, Kb)
+                ref = Float32.(from_device(A)) * Float32.(from_device(B))
+                @test from_device(C) ≈ ref rtol = 1.0f-2
+            end
         end
 
         # ── Dégradation gracieuse : une forme fp16 SANS chemin hardware doit
