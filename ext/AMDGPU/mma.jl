@@ -11,7 +11,7 @@
 #
 # TODO : fp8/bf8 (4 combos), 32×32×16 i8, SMFMAC (sparse), RDNA3 wave32/WMMA.
 
-import KernelIntrinsics.MMA: MMAConfig, ColMajor, MatrixA, MatrixB, Accumulator, MulAdd
+import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported
 
 # ── 1) Fallback wave64 ───────────────────────────────────────────────────────
@@ -84,11 +84,6 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
     AV = nw == 1 ? ST : NTuple{nw,VecElement{ST}}   # type d'opérande vu par l'intrinsic
     CV = NTuple{nc,VecElement{AccT}}                # type accumulateur
 
-    # Index de l'élément CT n° `jj` (0-based) de cette lane, pour A et pour B.
-    # (le rang k dans la tuile suit la même règle que pour les opérandes non packés)
-    elA = jj -> :(A[r0 + m + 1, c0 + $na * g + $jj + 1])
-    elB = jj -> :(B[r0 + $na * g + $jj + 1, c0 + n + 1])
-
     # Un « mot » ST à partir de pk éléments : conversion/reinterpret si pk==1,
     # sinon packing bit-à-bit (little-endian : élément p aux bits [8p, 8p+8)).
     UT = sizeof(ST) == 8 ? UInt64 : UInt32
@@ -106,8 +101,6 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
             :(reinterpret($ST, $ex))
         end
     end
-    rdA = word(elA, :((e - 1) * $pk))
-    rdB = word(elB, :((e - 1) * $pk))
     unwrap = nw == 1 ? :(f.x[1].value) : :(f.x)     # frag → opérande intrinsic
     # Ligne accumulateur (g = lane÷M, j = index élément 0-based).
     accm = if acclay === :blocked
@@ -127,37 +120,6 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
 
         @inline _operand(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, f::MFMAFrag) = $unwrap
 
-        @amdgpu_overlay @inline function _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{ColMajor})
-            r0, c0 = _base(row, col); lane = _lane0()
-            m = lane % $M; g = lane ÷ $M
-            x = ntuple(Val($nw)) do e
-                @inbounds VecElement($rdA)
-            end
-            MFMAFrag{MatrixA,$nw,$ST}(x)
-        end
-
-        @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{ColMajor})
-            r0, c0 = _base(row, col); lane = _lane0()
-            n = lane % $N; g = lane ÷ $N
-            x = ntuple(Val($nw)) do e
-                @inbounds VecElement($rdB)
-            end
-            MFMAFrag{MatrixB,$nw,$ST}(x)
-        end
-
-        @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{ColMajor})
-            r0, c0 = _base(row, col); lane = _lane0()
-            # g est l'index de GROUPE dans la partition par colonne (n = lane % N),
-            # donc lane ÷ N — pas ÷ M. Les deux coïncidaient tant que la table ne
-            # contenait que des formes carrées ; latent pour toute forme M ≠ N.
-            n = lane % $N; g = lane ÷ $N
-            x = ntuple(Val($nc)) do e
-                j = e - 1
-                @inbounds VecElement($AccT(C[r0 + $accm + 1, c0 + n + 1]))
-            end
-            MFMAFrag{Accumulator,$nc,$AccT}(x)
-        end
-
         @amdgpu_overlay @inline _fill_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
             MFMAFrag{Accumulator,$nc,$AccT}(ntuple(_ -> VecElement($AccT(v)), Val($nc)))
 
@@ -166,18 +128,71 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
                                               c::MFMAFrag{Accumulator})
             MFMAFrag{Accumulator,$nc,$AccT}(_mfma_call(cfg, _operand(cfg, a), _operand(cfg, b), c.x))
         end
+    end
 
-        @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
-                                                   d::MFMAFrag{Accumulator}, ::Type{ColMajor})
-            r0, c0 = _base(row, col); lane = _lane0()
-            n = lane % $N; g = lane ÷ $N     # cf. _load_c : ÷ N, pas ÷ M
-            for e in 1:$nc
-                j = e - 1
-                @inbounds C[r0 + $accm + 1, c0 + n + 1] = d.x[e].value
+    # ── Accès mémoire : une méthode par (forme, LAYOUT) ──────────────────────
+    # RowMajor = échanger les deux composantes d'index, exactement comme dans le
+    # fallback de src/mma.jl (et comme WMMA sur CUDA). Sans ça, `A'*B` était une
+    # MethodError sur AMD alors qu'elle marchait sur NVIDIA : contrat divergent.
+    # Le lane-mapping (m/n/g), lui, ne dépend pas du layout — seul le placement
+    # mémoire change.
+    for (LAYT, sw) in ((:ColMajor, false), (:RowMajor, true))
+        # Élément CT n° `jj` (0-based) de cette lane. Coordonnées LOGIQUES dans la
+        # tuile : A → (m, na*g+jj) ; B → (na*g+jj, n) ; accumulateur → (accm, n).
+        ax = (u, v) -> sw ? (v, u) : (u, v)
+        elA = jj -> (uv = ax(:(m), :($na * g + $jj)); :(A[r0 + $(uv[1]) + 1, c0 + $(uv[2]) + 1]))
+        elB = jj -> (uv = ax(:($na * g + $jj), :(n)); :(B[r0 + $(uv[1]) + 1, c0 + $(uv[2]) + 1]))
+        accuv = ax(accm, :(n))
+        accix = :(C[r0 + $(accuv[1]) + 1, c0 + $(accuv[2]) + 1])
+        rdA = word(elA, :((e - 1) * $pk))
+        rdB = word(elB, :((e - 1) * $pk))
+
+        @eval begin
+            @amdgpu_overlay @inline function _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{$LAYT})
+                r0, c0 = _base(row, col); lane = _lane0()
+                m = lane % $M; g = lane ÷ $M
+                x = ntuple(Val($nw)) do e
+                    @inbounds VecElement($rdA)
+                end
+                MFMAFrag{MatrixA,$nw,$ST}(x)
             end
-            nothing
-        end
 
+            @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{$LAYT})
+                r0, c0 = _base(row, col); lane = _lane0()
+                n = lane % $N; g = lane ÷ $N
+                x = ntuple(Val($nw)) do e
+                    @inbounds VecElement($rdB)
+                end
+                MFMAFrag{MatrixB,$nw,$ST}(x)
+            end
+
+            @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{$LAYT})
+                r0, c0 = _base(row, col); lane = _lane0()
+                # g est l'index de GROUPE dans la partition par colonne (n = lane % N),
+                # donc lane ÷ N — pas ÷ M. Les deux coïncidaient tant que la table ne
+                # contenait que des formes carrées ; latent pour toute forme M ≠ N.
+                n = lane % $N; g = lane ÷ $N
+                x = ntuple(Val($nc)) do e
+                    j = e - 1
+                    @inbounds VecElement($AccT($accix))
+                end
+                MFMAFrag{Accumulator,$nc,$AccT}(x)
+            end
+
+            @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
+                                                       d::MFMAFrag{Accumulator}, ::Type{$LAYT})
+                r0, c0 = _base(row, col); lane = _lane0()
+                n = lane % $N; g = lane ÷ $N     # cf. _load_c : ÷ N, pas ÷ M
+                for e in 1:$nc
+                    j = e - 1
+                    @inbounds $accix = d.x[e].value
+                end
+                nothing
+            end
+        end
+    end
+
+    @eval begin
         # Query hôte : gatée sur l'ARCHITECTURE RÉELLE du device (MFMA = CDNA only).
         # ⚠️ Les overrides device ci-dessus, eux, sont inconditionnels : appeler une
         # config sur une archi qui ne l'a pas échoue à la COMPILATION (« Cannot

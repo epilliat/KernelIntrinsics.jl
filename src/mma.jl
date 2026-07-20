@@ -165,17 +165,42 @@ end
 # 1-based ; `r0 = row - 1`, `c0 = col - 1` sont de simples décalages. C'est la
 # variante linéaire de l'API publique qui porte le coût du décodage, quand elle
 # est utilisée.
+#
+# ── Layout ──────────────────────────────────────────────────────────────────
+# `(row, col)` est TOUJOURS l'origine PHYSIQUE dans le tableau reçu ; le tag de
+# layout dit comment la tuile s'y déplie. Pour un élément logique de coordonnées
+# (u, v) dans la tuile :
+#     ColMajor → tableau[r0 + u + 1, c0 + v + 1]
+#     RowMajor → tableau[r0 + v + 1, c0 + u + 1]     (composantes échangées)
+#
+# Ce n'est pas un choix libre : c'est EXACTEMENT ce que fait déjà WMMA sur CUDA,
+# où le pointeur est pris à l'origine physique et la leading dimension reste
+# size(A,1) quel que soit le tag. RowMajor y signifie « l'élément (u,v) est à
+# ptr[u*ld + v] » — soit tableau[r0+v+1, c0+u+1]. Le fallback et MFMA doivent
+# suivre le hardware au bit près, sinon le contrat diverge selon le backend, ce
+# qui est précisément le défaut qu'on corrige ici.
+#
+# Concrètement : une matrice logique M×K stockée row-major se présente comme un
+# tableau Julia K×M, et se charge avec RowMajor.
+@inline _swap(::Type{ColMajor}) = false
+@inline _swap(::Type{RowMajor}) = true
+
+# Ordonne les deux composantes d'index selon le layout (appelé au TEMPS MACRO).
+_ax(swap, u, v) = swap ? (v, u) : (u, v)
 # load_a : lane possède ses lignes (op_y + mb·mi), toutes les colonnes K.
-@generated function _load_a_fb(::MMAConfig{M,N,K,CT,AccT,OP}, A, row, col, ::Type{ColMajor},
-                               ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
+@generated function _load_a_fb(::MMAConfig{M,N,K,CT,AccT,OP}, A, row, col, ::Type{LAY},
+                               ::Val{WS}) where {M,N,K,CT,AccT,OP,LAY,WS}
     mb, _ = _lane_grid(M, N, WS)
     Mr = M ÷ mb
     L = Mr * K
+    sw = _swap(LAY)
     els = Vector{Any}(undef, L)
     for i in 1:L
         mi = (i - 1) % Mr
         k  = (i - 1) ÷ Mr
-        els[i] = :($CT(@inbounds A[r0 + op_y + $(mb * mi) + 1, c0 + $k + 1]))
+        # coordonnées logiques dans la tuile : (m, k)
+        u, v = _ax(sw, :(op_y + $(mb * mi)), :($k))
+        els[i] = :($CT(@inbounds A[r0 + $u + 1, c0 + $v + 1]))
     end
     quote
         r0 = row - 1; c0 = col - 1
@@ -185,16 +210,19 @@ end
 end
 
 # load_b : lane possède ses colonnes (op_x + nb·ni), toutes les lignes K.
-@generated function _load_b_fb(::MMAConfig{M,N,K,CT,AccT,OP}, B, row, col, ::Type{ColMajor},
-                               ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
+@generated function _load_b_fb(::MMAConfig{M,N,K,CT,AccT,OP}, B, row, col, ::Type{LAY},
+                               ::Val{WS}) where {M,N,K,CT,AccT,OP,LAY,WS}
     mb, nb = _lane_grid(M, N, WS)
     Nc = N ÷ nb
     L = K * Nc
+    sw = _swap(LAY)
     els = Vector{Any}(undef, L)
     for j in 1:L
         k  = (j - 1) % K
         ni = (j - 1) ÷ K
-        els[j] = :($CT(@inbounds B[r0 + $k + 1, c0 + op_x + $(nb * ni) + 1]))
+        # coordonnées logiques dans la tuile : (k, n)
+        u, v = _ax(sw, :($k), :(op_x + $(nb * ni)))
+        els[j] = :($CT(@inbounds B[r0 + $u + 1, c0 + $v + 1]))
     end
     quote
         r0 = row - 1; c0 = col - 1
@@ -204,15 +232,18 @@ end
 end
 
 # load_c : lit l'accumulateur depuis la mémoire (mêmes indices que store_d!).
-@generated function _load_c_fb(::MMAConfig{M,N,K,CT,AccT,OP}, C, row, col, ::Type{ColMajor},
-                               ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
+@generated function _load_c_fb(::MMAConfig{M,N,K,CT,AccT,OP}, C, row, col, ::Type{LAY},
+                               ::Val{WS}) where {M,N,K,CT,AccT,OP,LAY,WS}
     mb, nb = _lane_grid(M, N, WS)
     Mr = M ÷ mb; Nc = N ÷ nb; L = Mr * Nc
+    sw = _swap(LAY)
     els = Vector{Any}(undef, L)
     for idx0 in 1:L
         mi = (idx0 - 1) % Mr
         ni = (idx0 - 1) ÷ Mr
-        els[idx0] = :($AccT(@inbounds C[r0 + op_y + $(mb * mi) + 1, c0 + op_x + $(nb * ni) + 1]))
+        # coordonnées logiques dans la tuile : (m, n)
+        u, v = _ax(sw, :(op_y + $(mb * mi)), :(op_x + $(nb * ni)))
+        els[idx0] = :($AccT(@inbounds C[r0 + $u + 1, c0 + $v + 1]))
     end
     quote
         r0 = row - 1; c0 = col - 1
@@ -264,13 +295,15 @@ end
 
 # store_d! : chaque lane écrit son sous-bloc (op_y+mb·mi, op_x+nb·ni).
 @generated function _store_d_fb!(::MMAConfig{M,N,K,CT,AccT,OP}, C, row, col, d::Frag{Accumulator},
-                                 ::Type{ColMajor}, ::Val{WS}) where {M,N,K,CT,AccT,OP,WS}
+                                 ::Type{LAY}, ::Val{WS}) where {M,N,K,CT,AccT,OP,LAY,WS}
     mb, nb = _lane_grid(M, N, WS)
     Mr = M ÷ mb; Nc = N ÷ nb
+    sw = _swap(LAY)
     sts = Any[]
     for ni in 0:(Nc - 1), mi in 0:(Mr - 1)
-        push!(sts, :(@inbounds C[r0 + op_y + $(mb * mi) + 1, c0 + op_x + $(nb * ni) + 1] =
-                         d.x[$(mi + Mr * ni + 1)]))
+        # coordonnées logiques dans la tuile : (m, n) — miroir exact de _load_c_fb.
+        u, v = _ax(sw, :(op_y + $(mb * mi)), :(op_x + $(nb * ni)))
+        push!(sts, :(@inbounds C[r0 + $u + 1, c0 + $v + 1] = d.x[$(mi + Mr * ni + 1)]))
     end
     quote
         r0 = row - 1; c0 = col - 1

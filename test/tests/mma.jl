@@ -59,6 +59,20 @@ end
 run_kloop_rc(cfg, C, A, B, Kb) =
     (mma_kloop_rc!(backend, Int(warpsz))(cfg, C, A, B, Val(Kb); ndrange = Int(warpsz)); synchronize(backend))
 
+# Tuile avec layout par opérande. `la`/`lb` sont des TYPES de tag passés en
+# argument (pas des paramètres de MMAConfig) : la config reste inchangée.
+@kernel function mma_tile_lay!(cfg, C, A, B, fillv, la, lb)
+    a = MMA.load_a(cfg, A, 1, 1, la)
+    b = MMA.load_b(cfg, B, 1, 1, lb)
+    c = MMA.fill_c(cfg, fillv)
+    d = MMA.mma(cfg, a, b, c)
+    MMA.store_d!(cfg, C, 1, 1, d, MMA.ColMajor)
+end
+
+run_tile_lay(cfg, C, A, B, fillv, la, lb) =
+    (mma_tile_lay!(backend, Int(warpsz))(cfg, C, A, B, fillv, la, lb; ndrange = Int(warpsz));
+     synchronize(backend))
+
 @testset "MMA" begin
     # Fallback : warpsize 32 (CUDA/RDNA/Metal) ou 64 (CDNA/MI300, via l'override
     # _mma_wave dans l'ext AMDGPU). Le lane-grid s'adapte à la warpsize.
@@ -175,6 +189,62 @@ run_kloop_rc(cfg, C, A, B, Kb) =
                 run_kloop_rc(cfg, C, A, B, Kb)
                 ref = Float32.(from_device(A)) * Float32.(from_device(B))
                 @test from_device(C) ≈ ref rtol = 1.0f-2
+            end
+        end
+
+        # ── RowMajor : le MÊME contrat sur le fallback, sur WMMA et sur MFMA.
+        #    Une matrice logique M×K stockée row-major se présente comme un
+        #    tableau Julia K×M ; on la charge avec RowMajor et on doit retrouver
+        #    A·B. C'est la réponse aux transposées (A'·B), et elle DOIT être
+        #    identique sur les trois chemins — avant, RowMajor n'existait que sur
+        #    CUDA-WMMA et levait une MethodError sur AMD.
+        @testset "RowMajor $tag ($CTr)" for (tag, CTr, AccTr, rtolr) in
+            (("fallback fp32", Float32, Float32, 1.0f-4),
+             ("fallback ComplexF32", ComplexF32, ComplexF32, 1.0f-4))
+
+            Ah = rand(CTr, M, K); Bh = rand(CTr, K, N)
+            # Stockage row-major de A ⇒ tableau K×M ; idem pour B ⇒ tableau N×K.
+            Art = to_device(Matrix(transpose(Ah)))
+            Brt = to_device(Matrix(transpose(Bh)))
+            Ac = to_device(Ah); Bc = to_device(Bh)
+            cfg = MMA.MMAConfig{M,N,K,CTr,AccTr,MMA.MulAdd}()
+            ref = Ah * Bh
+
+            C1 = to_device(zeros(AccTr, M, N))
+            run_tile_lay(cfg, C1, Art, Bc, zero(AccTr), MMA.RowMajor, MMA.ColMajor)
+            @test from_device(C1) ≈ ref rtol = rtolr
+
+            C2 = to_device(zeros(AccTr, M, N))
+            run_tile_lay(cfg, C2, Ac, Brt, zero(AccTr), MMA.ColMajor, MMA.RowMajor)
+            @test from_device(C2) ≈ ref rtol = rtolr
+
+            C3 = to_device(zeros(AccTr, M, N))
+            run_tile_lay(cfg, C3, Art, Brt, zero(AccTr), MMA.RowMajor, MMA.RowMajor)
+            @test from_device(C3) ≈ ref rtol = rtolr
+        end
+
+        # Même chose sur le chemin HARDWARE (WMMA sur CUDA, MFMA sur MI300) : c'est
+        # la preuve que fallback et hardware s'accordent sur la sémantique du tag.
+        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+            @testset "RowMajor HW (fp16→fp32)" begin
+                Ah = rand(Float16, M, K); Bh = rand(Float16, K, N)
+                Art = to_device(Matrix(transpose(Ah)))
+                Brt = to_device(Matrix(transpose(Bh)))
+                Ac = to_device(Ah); Bc = to_device(Bh)
+                cfg = MMA.MMAConfig{M,N,K,Float16,Float32,MMA.MulAdd}()
+                ref = Float32.(Ah) * Float32.(Bh)
+
+                C1 = to_device(zeros(Float32, M, N))
+                run_tile_lay(cfg, C1, Art, Bc, 0.0f0, MMA.RowMajor, MMA.ColMajor)
+                @test from_device(C1) ≈ ref rtol = 1.0f-2
+
+                C2 = to_device(zeros(Float32, M, N))
+                run_tile_lay(cfg, C2, Ac, Brt, 0.0f0, MMA.ColMajor, MMA.RowMajor)
+                @test from_device(C2) ≈ ref rtol = 1.0f-2
+
+                C3 = to_device(zeros(Float32, M, N))
+                run_tile_lay(cfg, C3, Art, Brt, 0.0f0, MMA.RowMajor, MMA.RowMajor)
+                @test from_device(C3) ≈ ref rtol = 1.0f-2
             end
         end
 
