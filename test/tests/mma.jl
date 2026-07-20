@@ -115,6 +115,21 @@ run_offset(cfg, C, A, B, r, c0, kc) =
     (mma_offset!(backend, Int(warpsz))(cfg, C, A, B, r, c0, kc; ndrange = Int(warpsz));
      synchronize(backend))
 
+# load_c : lit l'accumulateur DEPUIS la mémoire, puis fusionne A·B par-dessus —
+# le motif d'épilogue « D = A·B + C » d'un GEMM tuilé. C'est le SEUL point d'entrée
+# public (+ ses 3 overrides fallback/WMMA/MFMA) qu'aucun test n'exerçait : un bug
+# de layout dans _load_c y passait muet.
+@kernel function mma_loadc!(cfg, D, A, B, Cin)
+    a = MMA.load_a(cfg, A, 1, 1, MMA.ColMajor)
+    b = MMA.load_b(cfg, B, 1, 1, MMA.ColMajor)
+    c = MMA.load_c(cfg, Cin, 1, 1, MMA.ColMajor)
+    d = MMA.mma(cfg, a, b, c)
+    MMA.store_d!(cfg, D, 1, 1, d, MMA.ColMajor)
+end
+
+run_loadc(cfg, D, A, B, Cin) =
+    (mma_loadc!(backend, Int(warpsz))(cfg, D, A, B, Cin; ndrange = Int(warpsz)); synchronize(backend))
+
 @testset "MMA" begin
     # Fallback : warpsize 32 (CUDA/RDNA/Metal) ou 64 (CDNA/MI300, via l'override
     # _mma_wave dans l'ext AMDGPU). Le lane-grid s'adapte à la warpsize.
@@ -291,6 +306,28 @@ run_offset(cfg, C, A, B, r, c0, kc) =
             end
         end
 
+        # RowMajor sur les formes HW ASYMÉTRIQUES (M≠N). Le `_swap` échange les
+        # composantes d'indice ; un bug RowMajor propre à une tuile non carrée —
+        # exactement le cas `A'` sur tuile asymétrique — ne se verrait pas sur
+        # 16×16. Ces formes n'existent qu'en WMMA (MFMA gfx942 est carré).
+        for (Mh, Nh, Kh) in ((8, 32, 16), (32, 8, 16))
+            cfgh = MMA.MMAConfig{Mh,Nh,Kh,Float16,Float32,MMA.MulAdd}()
+            MMA.mma_supported(cfgh) || continue
+            @testset "RowMajor HW asymétrique $(Mh)×$(Nh)×$(Kh)" begin
+                Ah = rand(Float16, Mh, Kh); Bh = rand(Float16, Kh, Nh)
+                Art = to_device(Matrix(transpose(Ah)))   # A row-major ⇒ tableau Kh×Mh
+                Brt = to_device(Matrix(transpose(Bh)))   # B row-major ⇒ tableau Nh×Kh
+                Ac = to_device(Ah); Bc = to_device(Bh)
+                ref = Float32.(Ah) * Float32.(Bh)
+                C1 = to_device(zeros(Float32, Mh, Nh))
+                run_tile_lay(cfgh, C1, Art, Bc, 0.0f0, MMA.RowMajor, MMA.ColMajor)
+                @test from_device(C1) ≈ ref rtol = 1.0f-2
+                C2 = to_device(zeros(Float32, Mh, Nh))
+                run_tile_lay(cfgh, C2, Ac, Brt, 0.0f0, MMA.ColMajor, MMA.RowMajor)
+                @test from_device(C2) ≈ ref rtol = 1.0f-2
+            end
+        end
+
         # ── Mémoire partagée : les fragments se chargent depuis @localmem, sur le
         #    fallback ET sur le hardware. C'est le motif réel d'un GEMM tuilé.
         @testset "fragments depuis @localmem (fp32, fallback)" begin
@@ -312,6 +349,26 @@ run_offset(cfg, C, A, B, r, c0, kc) =
             end
         end
 
+        # ── load_c : lecture de l'accumulateur depuis la mémoire (fusion d'épilogue) ──
+        @testset "load_c fusion D=A·B+C (fp32, fallback)" begin
+            Ah = rand(Float32, M, K); Bh = rand(Float32, K, N); Ch = rand(Float32, M, N)
+            D = to_device(zeros(Float32, M, N))
+            cfg = MMA.MMAConfig{M,N,K,Float32,Float32,MMA.MulAdd}()
+            run_loadc(cfg, D, to_device(Ah), to_device(Bh), to_device(Ch))
+            @test from_device(D) ≈ Ah * Bh + Ch rtol = 1.0f-4
+        end
+
+        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+            @testset "load_c fusion D=A·B+C (fp16→fp32, HW)" begin
+                Ah = rand(Float16, M, K); Bh = rand(Float16, K, N); Ch = rand(Float32, M, N)
+                D = to_device(zeros(Float32, M, N))
+                cfg = MMA.MMAConfig{M,N,K,Float16,Float32,MMA.MulAdd}()
+                run_loadc(cfg, D, to_device(Ah), to_device(Bh), to_device(Ch))
+                ref = Float32.(Ah) * Float32.(Bh) + Ch
+                @test from_device(D) ≈ ref rtol = 1.0f-2
+            end
+        end
+
         # ── Décalages en M et en N (pas seulement le long de K) ──
         @testset "offsets M/N $tag" for (tag, CTo, AccTo, rt, hw) in
             (("fp32 (fallback)", Float32, Float32, 1.0f-4, false),
@@ -330,6 +387,21 @@ run_offset(cfg, C, A, B, r, c0, kc) =
             @test _f32.(got) ≈ ref rtol = rt
             # Le reste de C ne doit pas avoir été touché.
             @test all(iszero, from_device(C)[1:M, 1:N])
+        end
+
+        # Offsets M/N sur les formes HW ASYMÉTRIQUES : origine (Mh+1, Nh+1), tranche
+        # K décalée. Vérifie que le décodage (row, col) tient quand M≠N sur le HW.
+        for (Mh, Nh, Kh) in ((8, 32, 16), (32, 8, 16))
+            cfgh = MMA.MMAConfig{Mh,Nh,Kh,Float16,Float32,MMA.MulAdd}()
+            MMA.mma_supported(cfgh) || continue
+            @testset "offsets HW asymétrique $(Mh)×$(Nh)×$(Kh)" begin
+                Ah = rand(Float16, 2Mh, 2Kh); Bh = rand(Float16, 2Kh, 2Nh)
+                C = to_device(zeros(Float32, 2Mh, 2Nh))
+                run_offset(cfgh, C, to_device(Ah), to_device(Bh), Mh + 1, Nh + 1, Kh + 1)
+                ref = Float32.(Ah[(Mh + 1):2Mh, (Kh + 1):2Kh]) * Float32.(Bh[(Kh + 1):2Kh, (Nh + 1):2Nh])
+                @test from_device(C)[(Mh + 1):2Mh, (Nh + 1):2Nh] ≈ ref rtol = 1.0f-2
+                @test all(iszero, from_device(C)[1:Mh, 1:Nh])
+            end
         end
 
         # ── Adjoint / Transpose de Julia sur les chemins getindex ──
