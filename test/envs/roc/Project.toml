@@ -1,5 +1,6 @@
 [deps]
 AMDGPU = "21141c5a-9bdb-4563-92ae-f87d6854732e"
+DLFP8Types = "f4c16678-4a16-415b-82ef-ed337c5d6c7c"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 KernelIntrinsics = "f9588fbb-d238-4998-b15a-468e8766d49a"
 

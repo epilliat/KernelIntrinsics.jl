@@ -470,8 +470,13 @@ run_loadc(cfg, D, A, B, Cin) =
                     C = to_device(zeros(s.acc, s.M, s.N))
                     run_tile(cfg, C, to_device(Ah), to_device(Bh), zero(s.acc))
                     ref = _f32.(Ah) * _f32.(Bh)
+                    # fp8/bf8 : sizeof 1 dans la branche flottante (Int8 passe par la
+                    # branche entière ci-dessus). ≤3 bits de mantisse, mais la référence
+                    # décode les MÊMES octets fp8 que le hardware, donc l'écart n'est que
+                    # l'accumulation f32 — 5e-2 est large et sûr.
                     rt = s.compute === Core.BFloat16 ? 5.0f-2 :
-                         s.compute === Float64 ? 1.0f-6 : 1.0f-2
+                         s.compute === Float64 ? 1.0f-6 :
+                         sizeof(s.compute) == 1 ? 5.0f-2 : 1.0f-2
                     @test _f32.(from_device(C)) ≈ ref rtol = rt
                 end
             end

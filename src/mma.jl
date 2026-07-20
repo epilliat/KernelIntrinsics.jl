@@ -347,4 +347,8 @@ end
     end
 end
 
+# Codegen MFMA partagé (extension AMDGPU de base + extension fp8). Dormant tant
+# qu'aucune extension AMD ne l'appelle.
+include("mma_amd.jl")
+
 end # module MMA
