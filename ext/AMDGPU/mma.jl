@@ -43,13 +43,23 @@ end
 #        - i8   : 8 int8 PACKÉS dans un i64             ⇒ ST=Int64, packing
 #        Le facteur de packing pk = sizeof(ST)÷sizeof(CT) est déduit, pas stocké.
 #   na = éléments de CT par lane ; nw = na÷pk mots ST réellement passés.
-#   archs = architectures GCN où l'op EXISTE. MFMA est propre à CDNA — sur RDNA il
-#        n'y a rien de tout ça. Seul **gfx942 est validé ici** ; les autres noms
-#        viennent de l'ISA CDNA. Se tromper ne peut que produire une erreur de
-#        compilation bruyante (« Cannot select »), jamais des chiffres faux.
+#   archs = architectures GCN où l'op EXISTE d'après l'ISA CDNA. MFMA est propre à
+#        CDNA — sur RDNA il n'y a rien de tout ça.
+#
+# ⚠️ « Exister » ne veut PAS dire « avoir le même layout ». Une erreur d'archi sur
+# l'INTRINSIC produit une erreur de compilation bruyante (« Cannot select »), mais
+# une erreur d'archi sur le LAYOUT d'accumulateur produit des chiffres
+# silencieusement faux : rien ne garantit que gfx908/gfx90a/gfx950 distribuent
+# l'accumulateur sur les lanes comme gfx942. Or gfx942 est la SEULE archi où ces
+# layouts ont été vérifiés sur hardware (cf. local/mma/proto/probe_layout.jl).
+# Donc `mma_supported` croise la table ISA avec les archis réellement validées :
+# mieux vaut sous-promettre (⇒ fallback portable, correct partout) que promettre
+# un layout supposé. Élargir _MFMA_VALIDATED EXIGE de repasser le prober.
 const _CDNA1 = ("gfx908", "gfx90a", "gfx942", "gfx950")   # MFMA de base
 const _CDNA2 = ("gfx90a", "gfx942", "gfx950")             # + bf16 .1k, f64
 const _CDNA3 = ("gfx942", "gfx950")                       # + i8 K=32
+
+const _MFMA_VALIDATED = ("gfx942",)   # layouts confirmés sur hardware
 
 const _MFMA_OPS = (
     # (M, N, K, CT, AccT, ST, intrinsic, na, nc, acc_layout, archs)
@@ -137,7 +147,10 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
 
         @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx, ::Type{ColMajor})
             r0, c0 = _base(C, idx); lane = _lane0()
-            n = lane % $N; g = lane ÷ $M
+            # g est l'index de GROUPE dans la partition par colonne (n = lane % N),
+            # donc lane ÷ N — pas ÷ M. Les deux coïncidaient tant que la table ne
+            # contenait que des formes carrées ; latent pour toute forme M ≠ N.
+            n = lane % $N; g = lane ÷ $N
             x = ntuple(Val($nc)) do e
                 j = e - 1
                 @inbounds VecElement($AccT(C[r0 + $accm + 1, c0 + n + 1]))
@@ -157,7 +170,7 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
         @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx,
                                                    d::MFMAFrag{Accumulator}, ::Type{ColMajor})
             r0, c0 = _base(C, idx); lane = _lane0()
-            n = lane % $N; g = lane ÷ $M
+            n = lane % $N; g = lane ÷ $N     # cf. _load_c : ÷ N, pas ÷ M
             for e in 1:$nc
                 j = e - 1
                 @inbounds C[r0 + $accm + 1, c0 + n + 1] = d.x[e].value
@@ -170,6 +183,7 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
         # config sur une archi qui ne l'a pas échoue à la COMPILATION (« Cannot
         # select ») au lieu de retomber sur le fallback. `mma_supported` est donc le
         # garde-fou que l'appelant doit interroger avant de choisir sa tuile.
-        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) = _gfx() in $ARCHS
+        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) =
+            _gfx() in $ARCHS && _gfx() in _MFMA_VALIDATED
     end
 end

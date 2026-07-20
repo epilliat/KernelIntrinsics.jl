@@ -124,6 +124,22 @@ run_kloop(cfg, C, A, B, fillv, Kb) =
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
         end
 
+        # ── Dégradation gracieuse : une forme fp16 SANS chemin hardware doit
+        #    retomber sur le fallback portable, pas casser à la compilation.
+        #    16×16×8 n'est ni une forme WMMA (CUDA) ni une forme MFMA (gfx942) —
+        #    régression : tant que les overrides laissaient M,N,K libres, cette
+        #    config capturait l'override du bon type et mourait sur un
+        #    `_tuple_error` au lieu de dégrader.
+        @testset "fallback fp16 16×16×8 (forme hors table)" begin
+            cfg8 = MMA.MMAConfig{16,16,8,Float16,Float32,MMA.MulAdd}()
+            @test MMA.mma_supported(cfg8) == false
+            A = to_device(rand(Float16, 16, 8)); B = to_device(rand(Float16, 8, 16))
+            C = to_device(zeros(Float32, 16, 16))
+            run_tile(cfg8, C, A, B, 0.0f0)
+            ref = Float32.(from_device(A)) * Float32.(from_device(B))
+            @test from_device(C) ≈ ref rtol = 1.0f-2
+        end
+
         # ── Chemin HARDWARE fp16→fp32, MÊME kernel (WMMA sur CUDA, MFMA sur MI300) ──
         # On BALAYE toutes les formes candidates et on teste celles que le backend
         # ANNONCE supportées : `mma_supported` ne doit jamais promettre sans preuve.
