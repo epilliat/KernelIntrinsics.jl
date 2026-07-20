@@ -71,14 +71,18 @@ run_kloop(cfg, C, A, B, fillv, Kb) =
         #    faire en Int32, sinon Int8*Int8 déborde.
         # K=32 : c'est la forme i8 de gfx942 (le K=16 y est absent). Sur CUDA le
         # fallback encaisse n'importe quel K, donc le même test couvre les deux.
-        @testset "GEMM Int8→Int32 16×16×32 (MFMA/fallback)" begin
-            Ki = 32
-            A = to_device(rand(Int8(-100):Int8(100), M, Ki))
-            B = to_device(rand(Int8(-100):Int8(100), Ki, N))
-            C = to_device(zeros(Int32, M, N))
-            cfg = MMA.MMAConfig{M,N,Ki,Int8,Int32,MMA.MulAdd}()
-            run_tile(cfg, C, A, B, Int32(0))
-            @test from_device(C) == Int32.(from_device(A)) * Int32.(from_device(B))
+        for (Mi, Ni, Ki) in ((16, 16, 32), (32, 32, 16))
+            cfgi = MMA.MMAConfig{Mi,Ni,Ki,Int8,Int32,MMA.MulAdd}()
+            # 32×32 n'a pas de chemin fallback ici (grille lane 16×16 seulement) :
+            # on ne l'exerce que là où le hardware l'expose.
+            (Mi == 32 && !MMA.mma_supported(cfgi)) && continue
+            @testset "GEMM Int8→Int32 $(Mi)×$(Ni)×$(Ki) (MFMA/fallback)" begin
+                A = to_device(rand(Int8(-100):Int8(100), Mi, Ki))
+                B = to_device(rand(Int8(-100):Int8(100), Ki, Ni))
+                C = to_device(zeros(Int32, Mi, Ni))
+                run_tile(cfgi, C, A, B, Int32(0))
+                @test from_device(C) == Int32.(from_device(A)) * Int32.(from_device(B))
+            end
         end
 
         # ── Structure complexe : ComplexF32 (fallback-only, via muladd) ──

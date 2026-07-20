@@ -61,6 +61,7 @@ const _MFMA_OPS = (
     # gfx942 a REMPLACÉ le i8 K=16 (gfx908/90a) par K=32 à opérandes i64 : le
     # `mfma.i32.16x16x16i8` existe dans LLVM mais finit en « Cannot select » ici.
     (16, 16, 32, Int8, Int32, Int64, "llvm.amdgcn.mfma.i32.16x16x32.i8", 8, 4, :blocked, _CDNA3),
+    (32, 32, 16, Int8, Int32, Int64, "llvm.amdgcn.mfma.i32.32x32x16.i8", 8, 16, :blk4, _CDNA3),
 )
 
 # Architecture GCN du device courant, suffixes de features retirés
