@@ -17,7 +17,7 @@
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported, mma_shapes
-import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED
+import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _MFMA_SHAPE_REGISTRY
 
 # ── 1) Fallback wave64 ───────────────────────────────────────────────────────
 @amdgpu_overlay @inline _mma_wave() = Val{64}()
@@ -73,9 +73,7 @@ _mfma_shape_if_supported(gfx, row) =
     end
 
 # Énumération des configs hardware du device courant (cf. docstring dans src/mma.jl).
-# Requête HÔTE : à ce moment toutes les extensions sont chargées, donc on peut
-# interroger l'extension fp8 via `Base.get_extension` (renvoie `nothing` si absente)
-# et fusionner ses lignes — sans registre mutable ni souci de précompilation.
+# Table de base + registre des extensions optionnelles (fp8, remplie à leur __init__).
 function mma_shapes(::AMDGPU.ROCBackend)
     gfx = _gfx()
     out = Any[]
@@ -83,12 +81,9 @@ function mma_shapes(::AMDGPU.ROCBackend)
         s = _mfma_shape_if_supported(gfx, row)
         s === nothing || push!(out, s)
     end
-    fp8 = Base.get_extension(parentmodule(@__MODULE__), :KernelIntrinsicsAMDGPUDLFP8TypesExt)
-    if fp8 !== nothing
-        for row in fp8._MFMA_OPS_FP8
-            s = _mfma_shape_if_supported(gfx, row)
-            s === nothing || push!(out, s)
-        end
+    for row in _MFMA_SHAPE_REGISTRY
+        s = _mfma_shape_if_supported(gfx, row)
+        s === nothing || push!(out, s)
     end
     return Tuple(out)
 end
