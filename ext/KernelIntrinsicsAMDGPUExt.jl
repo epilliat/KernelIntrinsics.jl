@@ -40,5 +40,6 @@ include("AMDGPU/shuffle_vote.jl")
 include("AMDGPU/vectorization.jl")
 include("AMDGPU/sleep.jl")
 include("AMDGPU/dynlocalmem.jl")
+include("AMDGPU/mma.jl")
 
 end # module KernelIntrinsicsAMDGPUExt

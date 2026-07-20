@@ -25,3 +25,7 @@ include("tests/sleep.jl")
 # Dynamic workgroup memory is implemented for CUDA and AMD only; Metal has no
 # equivalent opt-in region exposed through KernelAbstractions.
 TEST_BACKEND in ("cuda", "roc") && include("tests/dynlocalmem.jl")
+
+# MMA (tensor cores) : chemin HW WMMA validé sur CUDA ; le fallback portable est
+# exercé via le même harnais. Le path AMD (MFMA) n'est pas encore câblé.
+TEST_BACKEND == "cuda" && include("tests/mma.jl")

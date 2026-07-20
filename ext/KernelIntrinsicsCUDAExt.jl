@@ -26,5 +26,6 @@ include("CUDA/shuffle_vote.jl")
 include("CUDA/vectorization.jl")
 include("CUDA/sleep.jl")
 include("CUDA/dynlocalmem.jl")
+include("CUDA/mma.jl")
 
 end # module KernelIntrinsicsCUDAExt

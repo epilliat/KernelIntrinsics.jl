@@ -33,6 +33,7 @@ include("vectorization.jl")
 include("warp.jl")
 include("sleep.jl")
 include("dynlocalmem.jl")
+include("mma.jl")
 
 
 end # module KernelIntrinsics
