@@ -73,6 +73,48 @@ run_tile_lay(cfg, C, A, B, fillv, la, lb) =
     (mma_tile_lay!(backend, Int(warpsz))(cfg, C, A, B, fillv, la, lb; ndrange = Int(warpsz));
      synchronize(backend))
 
+# Fragments chargés depuis la MÉMOIRE PARTAGÉE (@localmem) — le cas d'usage réel
+# d'un GEMM tuilé, et le seul que le harnais ne couvrait pas. Attention : les
+# backends n'ont pas le même contrat sur l'argument tableau (CUDA prend
+# `pointer(A, idx)` + `size(A,1)`, AMD et le fallback font du getindex 2D), donc
+# c'est précisément ici qu'une divergence se verrait.
+@kernel unsafe_indices = true function mma_lds!(cfg, C, A, B, ::Val{Mt}, ::Val{Nt},
+                                                ::Val{Kt}, ::Val{WS}) where {Mt,Nt,Kt,WS}
+    lid = @index(Local, Linear)
+    sA = @localmem eltype(A) (Mt, Kt)
+    sB = @localmem eltype(B) (Kt, Nt)
+    for p in lid:WS:(Mt * Kt)
+        @inbounds sA[(p - 1) % Mt + 1, (p - 1) ÷ Mt + 1] = A[(p - 1) % Mt + 1, (p - 1) ÷ Mt + 1]
+    end
+    for p in lid:WS:(Kt * Nt)
+        @inbounds sB[(p - 1) % Kt + 1, (p - 1) ÷ Kt + 1] = B[(p - 1) % Kt + 1, (p - 1) ÷ Kt + 1]
+    end
+    @synchronize
+    a = MMA.load_a(cfg, sA, 1, 1, MMA.ColMajor)
+    b = MMA.load_b(cfg, sB, 1, 1, MMA.ColMajor)
+    c = MMA.fill_c(cfg, MMA.acc_identity(cfg))
+    d = MMA.mma(cfg, a, b, c)
+    MMA.store_d!(cfg, C, 1, 1, d, MMA.ColMajor)
+end
+
+run_lds(cfg, C, A, B, Mt, Nt, Kt) =
+    (mma_lds!(backend, Int(warpsz))(cfg, C, A, B, Val(Mt), Val(Nt), Val(Kt), Val(Int(warpsz));
+                                    ndrange = Int(warpsz)); synchronize(backend))
+
+# Tuile à une origine (row, col) quelconque dans une matrice plus grande : vérifie
+# les décalages en M et en N, alors que la boucle-K ne décale que le long de K.
+@kernel function mma_offset!(cfg, C, A, B, r, c0, kc)
+    a = MMA.load_a(cfg, A, r, kc, MMA.ColMajor)
+    b = MMA.load_b(cfg, B, kc, c0, MMA.ColMajor)
+    acc = MMA.fill_c(cfg, MMA.acc_identity(cfg))
+    d = MMA.mma(cfg, a, b, acc)
+    MMA.store_d!(cfg, C, r, c0, d, MMA.ColMajor)
+end
+
+run_offset(cfg, C, A, B, r, c0, kc) =
+    (mma_offset!(backend, Int(warpsz))(cfg, C, A, B, r, c0, kc; ndrange = Int(warpsz));
+     synchronize(backend))
+
 @testset "MMA" begin
     # Fallback : warpsize 32 (CUDA/RDNA/Metal) ou 64 (CDNA/MI300, via l'override
     # _mma_wave dans l'ext AMDGPU). Le lane-grid s'adapte à la warpsize.
@@ -117,9 +159,10 @@ run_tile_lay(cfg, C, A, B, fillv, la, lb) =
         # fallback encaisse n'importe quel K, donc le même test couvre les deux.
         for (Mi, Ni, Ki) in ((16, 16, 32), (32, 32, 16))
             cfgi = MMA.MMAConfig{Mi,Ni,Ki,Int8,Int32,MMA.MulAdd}()
-            # 32×32 n'a pas de chemin fallback ici (grille lane 16×16 seulement) :
-            # on ne l'exerce que là où le hardware l'expose.
-            (Mi == 32 && !MMA.mma_supported(cfgi)) && continue
+            # Le 32×32 A BIEN un chemin fallback : _lane_grid(32,32,·) = (4,8) en
+            # warpsize 32 et (8,8) en warpsize 64. Le `continue` qui l'excluait
+            # reposait sur un commentaire faux (« grille lane 16×16 seulement ») et
+            # sautait une couverture parfaitement valide.
             @testset "GEMM Int8→Int32 $(Mi)×$(Ni)×$(Ki) (MFMA/fallback)" begin
                 A = to_device(rand(Int8(-100):Int8(100), Mi, Ki))
                 B = to_device(rand(Int8(-100):Int8(100), Ki, Ni))
@@ -246,6 +289,72 @@ run_tile_lay(cfg, C, A, B, fillv, la, lb) =
                 run_tile_lay(cfg, C3, Art, Brt, 0.0f0, MMA.RowMajor, MMA.RowMajor)
                 @test from_device(C3) ≈ ref rtol = 1.0f-2
             end
+        end
+
+        # ── Mémoire partagée : les fragments se chargent depuis @localmem, sur le
+        #    fallback ET sur le hardware. C'est le motif réel d'un GEMM tuilé.
+        @testset "fragments depuis @localmem (fp32, fallback)" begin
+            A = to_device(rand(Float32, M, K)); B = to_device(rand(Float32, K, N))
+            C = to_device(zeros(Float32, M, N))
+            cfg = MMA.MMAConfig{M,N,K,Float32,Float32,MMA.MulAdd}()
+            run_lds(cfg, C, A, B, M, N, K)
+            @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
+        end
+
+        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+            @testset "fragments depuis @localmem (fp16→fp32, HW)" begin
+                A = to_device(rand(Float16, M, K)); B = to_device(rand(Float16, K, N))
+                C = to_device(zeros(Float32, M, N))
+                cfg = MMA.MMAConfig{M,N,K,Float16,Float32,MMA.MulAdd}()
+                run_lds(cfg, C, A, B, M, N, K)
+                ref = Float32.(from_device(A)) * Float32.(from_device(B))
+                @test from_device(C) ≈ ref rtol = 1.0f-2
+            end
+        end
+
+        # ── Décalages en M et en N (pas seulement le long de K) ──
+        @testset "offsets M/N $tag" for (tag, CTo, AccTo, rt, hw) in
+            (("fp32 (fallback)", Float32, Float32, 1.0f-4, false),
+             ("fp16→fp32 (HW)", Float16, Float32, 1.0f-2, true))
+
+            hw && !MMA.mma_supported(MMA.MMAConfig{M,N,K,CTo,AccTo,MMA.MulAdd}()) && continue
+            # A est 2M×2K, B est 2K×2N : on calcule la tuile (2e bloc de lignes,
+            # 2e bloc de colonnes) en prenant la 2e tranche de K.
+            Ah = rand(CTo, 2M, 2K); Bh = rand(CTo, 2K, 2N)
+            A = to_device(Ah); B = to_device(Bh)
+            C = to_device(zeros(AccTo, 2M, 2N))
+            cfg = MMA.MMAConfig{M,N,K,CTo,AccTo,MMA.MulAdd}()
+            run_offset(cfg, C, A, B, M + 1, N + 1, K + 1)
+            ref = _f32.(Ah[(M + 1):2M, (K + 1):2K]) * _f32.(Bh[(K + 1):2K, (N + 1):2N])
+            got = from_device(C)[(M + 1):2M, (N + 1):2N]
+            @test _f32.(got) ≈ ref rtol = rt
+            # Le reste de C ne doit pas avoir été touché.
+            @test all(iszero, from_device(C)[1:M, 1:N])
+        end
+
+        # ── Adjoint / Transpose de Julia sur les chemins getindex ──
+        # MESURÉ (pas supposé) : le fallback et MFMA lisent par getindex, donc un
+        # `A'` de Julia y fonctionne tel quel — et pour un complexe la CONJUGAISON
+        # vient gratuitement, puisque c'est getindex sur Adjoint qui la fait.
+        # Sur WMMA en revanche, `pointer` n'existe pas sur un Adjoint : l'appel
+        # échoue à la compilation (InvalidIRError), BRUYAMMENT. Aucun chemin ne
+        # produit de chiffres faux. La forme portable, valable partout, reste
+        # RowMajor sur le parent (testée plus haut).
+        @testset "Adjoint/Transpose sur le fallback" begin
+            Ap = rand(Float32, K, M); Bh = rand(Float32, K, N)
+            cfg = MMA.MMAConfig{M,N,K,Float32,Float32,MMA.MulAdd}()
+            C = to_device(zeros(Float32, M, N))
+            run_tile_lay(cfg, C, to_device(Ap)', to_device(Bh), 0.0f0,
+                         MMA.ColMajor, MMA.ColMajor)
+            @test from_device(C) ≈ transpose(Ap) * Bh rtol = 1.0f-4
+
+            # Complexe : A' conjugue, et le fallback doit le refléter.
+            Apc = rand(ComplexF32, K, M); Bhc = rand(ComplexF32, K, N)
+            cfgc = MMA.MMAConfig{M,N,K,ComplexF32,ComplexF32,MMA.MulAdd}()
+            Cc = to_device(zeros(ComplexF32, M, N))
+            run_tile_lay(cfgc, Cc, to_device(Apc)', to_device(Bhc), 0.0f0 + 0.0f0im,
+                         MMA.ColMajor, MMA.ColMajor)
+            @test from_device(Cc) ≈ adjoint(Apc) * Bhc rtol = 1.0f-4
         end
 
         # ── Dégradation gracieuse : une forme fp16 SANS chemin hardware doit

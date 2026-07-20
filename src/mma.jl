@@ -98,6 +98,19 @@ end
 # (row, col) le décodage n'existe pas ; c'est la forme linéaire qui paie, et
 # seulement elle. Les stubs internes prennent donc (row, col) comme forme
 # canonique et la variante linéaire n'est qu'un adaptateur.
+#
+# ── Adjoint / Transpose de Julia (comportement MESURÉ, pas supposé) ─────────
+# Le fallback et MFMA lisent leurs opérandes par `getindex` 2D : un `A'` de Julia
+# y fonctionne donc tel quel, et pour un élément complexe la CONJUGAISON est
+# gratuite — c'est `getindex` sur `Adjoint` qui la fait. WMMA, lui, prend un
+# `pointer`, qui n'existe pas sur un `Adjoint` : l'appel échoue à la compilation
+# (InvalidIRError). Autrement dit la divergence entre backends est BRUYANTE ;
+# aucun chemin ne renvoie de chiffres faux.
+#
+# La forme portable — supportée à l'identique sur les trois chemins — est
+# RowMajor sur le tableau parent, pas le wrapper :
+#     load_a(cfg, parent, col, row, RowMajor)   ≡   load_a(cfg, parent', row, col, ColMajor)
+# (l'origine s'échange en même temps que le layout).
 @inline function _rowcol(A, idx)
     ld = size(A, 1); b0 = idx - 1
     return (b0 % ld + 1, b0 ÷ ld + 1)
