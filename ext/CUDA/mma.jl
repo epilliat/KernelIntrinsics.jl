@@ -13,7 +13,7 @@
 # THIRD_PARTY_LICENSES.
 
 import KernelIntrinsics.MMA: MMAConfig, RowMajor, ColMajor, MulAdd
-import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported
+import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported, mma_shapes
 using CUDA: WMMA
 
 @inline _wmma_layout(::Type{RowMajor}) = WMMA.RowMajor
@@ -74,4 +74,19 @@ for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
         mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) =
             CUDA.capability(CUDA.device()) >= $MINCAP
     end
+end
+
+# Énumération des configs hardware du device courant (cf. le docstring dans
+# src/mma.jl). Construite depuis la MÊME table que les overrides et gatée sur la
+# même capability : impossible qu'elle dérive de ce que `mma_supported` répond.
+function mma_shapes(::CUDA.CUDABackend)
+    cap = CUDA.capability(CUDA.device())
+    out = Any[]
+    for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES
+        cap >= MINCAP || continue
+        for (M, N, K) in SHAPES
+            push!(out, (M = M, N = N, K = K, compute = CT, acc = AccT))
+        end
+    end
+    return Tuple(out)
 end

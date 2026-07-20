@@ -373,6 +373,38 @@ run_offset(cfg, C, A, B, r, c0, kc) =
             @test from_device(C) ≈ ref rtol = 1.0f-2
         end
 
+        # ── mma_shapes(backend) : l'énumération DOIT être exacte ──
+        # Le testset balaye ce que le backend annonce et fait tourner un vrai GEMM
+        # sur CHAQUE entrée. C'est l'invariant « ne jamais annoncer une capacité
+        # non testée », rendu automatique : ajouter une ligne à une table backend
+        # sans qu'elle marche fait échouer les tests, sans rien écrire ici.
+        @testset "mma_shapes() énumère exactement le hardware" begin
+            shapes = MMA.mma_shapes(backend)
+            @test shapes isa Tuple
+            for s in shapes
+                cfg = MMA.MMAConfig{s.M,s.N,s.K,s.compute,s.acc,MMA.MulAdd}()
+                # 1) cohérence avec la query ponctuelle
+                @test MMA.mma_supported(cfg)
+                # 2) et ça calcule juste
+                if s.compute === Int8
+                    Ah = rand(Int8(-100):Int8(100), s.M, s.K)
+                    Bh = rand(Int8(-100):Int8(100), s.K, s.N)
+                    C = to_device(zeros(s.acc, s.M, s.N))
+                    run_tile(cfg, C, to_device(Ah), to_device(Bh), zero(s.acc))
+                    @test from_device(C) == Int32.(Ah) * Int32.(Bh)
+                else
+                    Ah = _as.(s.compute, rand(Float32, s.M, s.K))
+                    Bh = _as.(s.compute, rand(Float32, s.K, s.N))
+                    C = to_device(zeros(s.acc, s.M, s.N))
+                    run_tile(cfg, C, to_device(Ah), to_device(Bh), zero(s.acc))
+                    ref = _f32.(Ah) * _f32.(Bh)
+                    rt = s.compute === Core.BFloat16 ? 5.0f-2 :
+                         s.compute === Float64 ? 1.0f-6 : 1.0f-2
+                    @test _f32.(from_device(C)) ≈ ref rtol = rt
+                end
+            end
+        end
+
         # ── Chemin HARDWARE fp16→fp32, MÊME kernel (WMMA sur CUDA, MFMA sur MI300) ──
         # On BALAYE toutes les formes candidates et on teste celles que le backend
         # ANNONCE supportées : `mma_supported` ne doit jamais promettre sans preuve.

@@ -27,7 +27,7 @@ export MMAConfig
 export MatrixA, MatrixB, Accumulator, RowMajor, ColMajor
 export MulAdd, Tropical
 export load_a, load_b, load_c, fill_c, mma, store_d!
-export mma_supported
+export mma_supported, mma_shapes
 export mma_shape, compute_type, acc_type, acc_identity
 
 # ── Tags ────────────────────────────────────────────────────────────────────
@@ -139,6 +139,26 @@ grossière (par type/forme, pas par device exact) — suffisante pour choisir un
 tuile côté appelant. Les extensions backend la surchargent.
 """
 mma_supported(::MMAConfig) = false
+
+"""
+    mma_shapes(backend) -> Tuple of NamedTuple
+
+Énumère les configs pour lesquelles un chemin **hardware** existe sur le device
+courant de `backend` (le backend KernelAbstractions) : `(M, N, K, compute, acc)`. Requête HÔTE (elle interroge le device),
+pas utilisable dans un kernel.
+
+Existe pour que l'appelant (KernelForge) n'ait pas à redupliquer la connaissance
+des formes : il choisit sa tuile dans cette liste au lieu de coder en dur une
+table qui dériverait de celle-ci.
+
+INVARIANT : tout ce que `mma_shapes` liste doit vérifier `mma_supported(cfg)`.
+Ne jamais y ajouter une forme non testée sur hardware.
+
+Prend le backend en ARGUMENT (et non zéro argument) pour que les extensions le
+SPÉCIALISENT au lieu de l'écraser : une méthode de signature identique à celle du
+défaut est un « method overwriting », interdit pendant la précompilation.
+"""
+mma_shapes(::Any) = ()
 
 # ============================================================================
 # Fallback portable (régime « correction »)

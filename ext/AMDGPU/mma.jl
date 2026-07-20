@@ -12,7 +12,7 @@
 # TODO : fp8/bf8 (4 combos), 32×32×16 i8, SMFMAC (sparse), RDNA3 wave32/WMMA.
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
-import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported
+import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported, mma_shapes
 
 # ── 1) Fallback wave64 ───────────────────────────────────────────────────────
 @amdgpu_overlay @inline _mma_wave() = Val{64}()
@@ -201,4 +201,17 @@ for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
         mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) =
             _gfx() in $ARCHS && _gfx() in _MFMA_VALIDATED
     end
+end
+
+# Énumération des configs hardware du device courant (cf. le docstring dans
+# src/mma.jl). Même table et même double gate (ISA + archi validée) que
+# `mma_supported`, pour que les deux ne puissent pas diverger.
+function mma_shapes(::AMDGPU.ROCBackend)
+    gfx = _gfx()
+    out = Any[]
+    for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS
+        (gfx in ARCHS && gfx in _MFMA_VALIDATED) || continue
+        push!(out, (M = M, N = N, K = K, compute = CT, acc = AccT))
+    end
+    return Tuple(out)
 end
