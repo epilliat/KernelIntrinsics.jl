@@ -3,6 +3,15 @@
 
 import KernelIntrinsics.MMA as MMA
 
+# bf16 SANS dépendre de BFloat16s : `Core.BFloat16` est un type de Base, mais ses
+# conversions vivent dans BFloat16s. Or un bf16 est exactement les 16 bits de poids
+# fort d'un Float32 — donc on construit/relit par bits, en pur Base. Le sens
+# bf16→Float32 est exact (élargissement), ce qui donne une référence CPU fiable.
+_as(::Type{T}, x::Float32) where {T} = T(x)
+_as(::Type{Core.BFloat16}, x::Float32) = reinterpret(Core.BFloat16, (reinterpret(UInt32, x) >> 16) % UInt16)
+_f32(x) = Float32(x)
+_f32(b::Core.BFloat16) = reinterpret(Float32, UInt32(reinterpret(UInt16, b)) << 16)
+
 # Un warp calcule une tuile 16×16×16 : D = A·B, accumulateur initialisé à `fillv`.
 # Workgroupsize = warpsz ⇒ un workgroup = un warp (lockstep requis par WMMA).
 @kernel function mma_tile!(cfg, C, A, B, fillv)
@@ -99,15 +108,19 @@ run_kloop(cfg, C, A, B, fillv, Kb) =
         # ── Chemin HARDWARE fp16→fp32, MÊME kernel (WMMA sur CUDA, MFMA sur MI300) ──
         # On BALAYE toutes les formes candidates et on teste celles que le backend
         # ANNONCE supportées : `mma_supported` ne doit jamais promettre sans preuve.
-        for (Mh, Nh, Kh) in ((16, 16, 16), (8, 32, 16), (32, 8, 16), (32, 32, 8))
-            cfgh = MMA.MMAConfig{Mh,Nh,Kh,Float16,Float32,MMA.MulAdd}()
+        for (CT, AccT) in ((Float16, Float32), (Core.BFloat16, Float32)),
+            (Mh, Nh, Kh) in ((16, 16, 16), (8, 32, 16), (32, 8, 16), (32, 32, 8))
+
+            cfgh = MMA.MMAConfig{Mh,Nh,Kh,CT,AccT,MMA.MulAdd}()
             MMA.mma_supported(cfgh) || continue
-            @testset "HW GEMM $(Mh)×$(Nh)×$(Kh) (fp16→fp32)" begin
-                A = to_device(rand(Float16, Mh, Kh)); B = to_device(rand(Float16, Kh, Nh))
-                C = to_device(zeros(Float32, Mh, Nh))
-                run_tile(cfgh, C, A, B, 0.0f0)
-                ref = Float32.(from_device(A)) * Float32.(from_device(B))
-                @test from_device(C) ≈ ref rtol = 1.0f-2
+            @testset "HW GEMM $(Mh)×$(Nh)×$(Kh) ($CT→$AccT)" begin
+                A = to_device(_as.(CT, rand(Float32, Mh, Kh)))
+                B = to_device(_as.(CT, rand(Float32, Kh, Nh)))
+                C = to_device(zeros(AccT, Mh, Nh))
+                run_tile(cfgh, C, A, B, zero(AccT))
+                ref = _f32.(from_device(A)) * _f32.(from_device(B))
+                # bf16 n'a que 8 bits de mantisse (vs 11 pour fp16) → tolérance plus large.
+                @test from_device(C) ≈ ref rtol = (CT === Float16 ? 1.0f-2 : 5.0f-2)
             end
         end
 

@@ -39,15 +39,27 @@ end
 #     accumulateur, n = lane%N, et
 #       :blocked     → m = nc*g + j   (accum f32, validé via f16 16×16×16)
 #       :interleaved → m = nc*j + g   (accum f64, validé via f64 16×16×4)
+#   ST = type de STOCKAGE de l'opérande vu par l'intrinsic. Vaut CT sauf pour bf16,
+#        que LLVM prend en <4 x i16> ⇒ ST = Int16 et on `reinterpret` au chargement.
 const _MFMA_OPS = (
-    (16, 16, 16, Float16, Float32, "llvm.amdgcn.mfma.f32.16x16x16f16", 4, 4, :blocked),
-    (16, 16, 4, Float64, Float64, "llvm.amdgcn.mfma.f64.16x16x4f64", 1, 4, :interleaved),
-    (32, 32, 8, Float16, Float32, "llvm.amdgcn.mfma.f32.32x32x8f16", 4, 16, :blk4),
+    # (M, N, K, CT, AccT, ST, intrinsic, na, nc, acc_layout)
+    (16, 16, 16, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.16x16x16f16", 4, 4, :blocked),
+    (16, 16, 4, Float64, Float64, Float64, "llvm.amdgcn.mfma.f64.16x16x4f64", 1, 4, :interleaved),
+    (32, 32, 8, Float16, Float32, Float16, "llvm.amdgcn.mfma.f32.32x32x8f16", 4, 16, :blk4),
+    (16, 16, 16, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.16x16x16bf16.1k", 4, 4, :blocked),
+    (32, 32, 8, Core.BFloat16, Float32, Int16, "llvm.amdgcn.mfma.f32.32x32x8bf16.1k", 4, 16, :blk4),
 )
 
-for (M, N, K, CT, AccT, INTR, na, nc, acclay) in _MFMA_OPS
-    AV = na == 1 ? CT : NTuple{na,VecElement{CT}}   # type d'opérande vu par l'intrinsic
+for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay) in _MFMA_OPS
+    AV = na == 1 ? ST : NTuple{na,VecElement{ST}}   # type d'opérande vu par l'intrinsic
     CV = NTuple{nc,VecElement{AccT}}                # type accumulateur
+    # Lecture d'un élément d'opérande : conversion directe, ou reinterpret si le
+    # type de stockage diffère du type de calcul (bf16 → i16). Les expressions
+    # référencent r0/c0/m/n/g/e, liés dans les corps générés plus bas.
+    _ia = :(r0 + m + 1), :(c0 + $na * g + (e - 1) + 1)
+    _ib = :(r0 + $na * g + (e - 1) + 1), :(c0 + n + 1)
+    rdA = ST === CT ? :($CT(A[$(_ia[1]), $(_ia[2])])) : :(reinterpret($ST, A[$(_ia[1]), $(_ia[2])]))
+    rdB = ST === CT ? :($CT(B[$(_ib[1]), $(_ib[2])])) : :(reinterpret($ST, B[$(_ib[1]), $(_ib[2])]))
     unwrap = na == 1 ? :(f.x[1].value) : :(f.x)     # frag → opérande intrinsic
     # Ligne accumulateur (g = lane÷M, j = index élément 0-based).
     accm = if acclay === :blocked
@@ -71,18 +83,18 @@ for (M, N, K, CT, AccT, INTR, na, nc, acclay) in _MFMA_OPS
             r0, c0 = _base(A, idx); lane = _lane0()
             m = lane % $M; g = lane ÷ $M
             x = ntuple(Val($na)) do e
-                @inbounds VecElement($CT(A[r0 + m + 1, c0 + $na * g + (e - 1) + 1]))
+                @inbounds VecElement($rdA)
             end
-            MFMAFrag{MatrixA,$na,$CT}(x)
+            MFMAFrag{MatrixA,$na,$ST}(x)
         end
 
         @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, idx, ::Type{ColMajor})
             r0, c0 = _base(B, idx); lane = _lane0()
             n = lane % $N; g = lane ÷ $N
             x = ntuple(Val($na)) do e
-                @inbounds VecElement($CT(B[r0 + $na * g + (e - 1) + 1, c0 + n + 1]))
+                @inbounds VecElement($rdB)
             end
-            MFMAFrag{MatrixB,$na,$CT}(x)
+            MFMAFrag{MatrixB,$na,$ST}(x)
         end
 
         @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, idx, ::Type{ColMajor})
