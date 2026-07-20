@@ -60,8 +60,14 @@ for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
         CUDA.@device_override @inline _fill_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
             WMMA.fill_c($AccT(v), WMMA.Config{$M,$N,$K,$AccT})
 
+        # Tags d'usage contraints (MatrixA/MatrixB/Accumulator), comme MFMA et le
+        # fallback : inverser a/b devient une MethodError à la FRONTIÈRE de KI, au
+        # lieu d'être rattrapé un cran plus bas dans `WMMA.mma`. Les trois chemins
+        # offrent alors la même garantie d'ordre d'opérandes.
         CUDA.@device_override @inline _mma(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd},
-                                           a::WMMA.Fragment, b::WMMA.Fragment, c::WMMA.Fragment) =
+                                           a::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixA},
+                                           b::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixB},
+                                           c::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.Accumulator}) =
             WMMA.mma(a, b, c, WMMA.Config{$M,$N,$K,$AccT})
 
         CUDA.@device_override @inline _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
