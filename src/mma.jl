@@ -183,6 +183,50 @@ end
 _ext_shapes(backend::Type) =
     NamedTuple[e[2] for e in _EXT_SHAPE_REGISTRY if e[1] === backend && e[3]()]
 
+# ── Jeton matériel (backend token) ───────────────────────────────────────────
+#
+# POURQUOI CE JETON EXISTE — deux raisons, toutes deux dures :
+#
+# (1) CORRECTION. Les six points d'entrée `_load_a/_load_b/_load_c/_fill_c/
+#     _mma/_store_d!` étaient installés par les extensions via des OVERLAYS
+#     (`CUDA.@device_override` / `Base.Experimental.@overlay`). Un overlay sur
+#     une fonction qui PRODUIT un fragment empêche l'inférence de voir à travers
+#     l'appel : le fragment revient imprécisément typé, SROA n'arrive plus à
+#     promouvoir l'accumulateur, et la valeur portée par la boucle-K dégénère en
+#     `phi float [ undef, %preheader ]` (le chemin CUDA.WMMA direct, lui, émet
+#     `0.000000e+00`). `undef` peut se matérialiser en 0 OU en n'importe quoi :
+#     résultats SILENCIEUSEMENT faux, et le symptôme apparaît/disparaît au gré
+#     de la forme du code, de la version de LLVM et du nombre de warps.
+#
+# (2) COLLISION. On ne peut PAS simplement supprimer les overlays : WMMA (CUDA)
+#     et MFMA (AMD) définissent des signatures LITTÉRALEMENT identiques
+#     (`_fill_c(::MMAConfig{16,16,16,Float16,Float32,MulAdd}, v)` existe des deux
+#     côtés). En méthodes ordinaires elles s'écraseraient l'une l'autre, et la
+#     méthode AMD (`::Type{ColMajor}`) étant plus spécifique que celle de CUDA
+#     (`where {L}`), AMD gagnerait même sur un `CuArray`.
+#
+# La solution combine les deux : un JETON de backend résolu à la compilation.
+# `_mma_hw()` reste le SEUL overlay du chemin MMA — et il renvoie un SINGLETON,
+# donc il ne porte aucune donnée à laquelle un `undef` pourrait s'accrocher
+# (même forme que `_mma_wave()`, qui fonctionne depuis toujours). Tout le reste
+# devient des méthodes ORDINAIRES, discriminées par le jeton en 1er argument.
+#
+# RÈGLE GÉNÉRALE À RETENIR (valable pour tout le dépôt) : un overlay n'est requis
+# que lorsque deux backends définiraient SINON la MÊME signature de méthode —
+# c'est le cas de `_shfl`, `_vote`, `_sleep`, `fence`, `_dynlocalmem`, `_laneid`,
+# `_warpsize`, qui doivent rester des overlays. Ce n'est PAS le cas dès qu'un
+# argument distingue déjà les backends. Ne pas réintroduire d'overlay sur une
+# fonction qui produit ou consomme un fragment.
+#
+# Côté HÔTE, `_mma_hw()` renvoie `NoHW()` (les overlays sont device-only) : le
+# comportement hôte reste donc exactement celui d'avant — fallback portable.
+abstract type MMAHW end
+struct NoHW     <: MMAHW end   # fallback portable (et tout appel côté hôte)
+struct NVIDIATC <: MMAHW end   # tensor cores NVIDIA (WMMA / mma.sync)
+struct CDNAMFMA <: MMAHW end   # MFMA (CDNA/AMD)
+
+@inline _mma_hw() = NoHW()
+
 # ============================================================================
 # Fallback portable (régime « correction »)
 # ============================================================================
@@ -208,13 +252,38 @@ function _lane_grid(M, N, WS)
     return (best[1], best[2])
 end
 
-@inline _load_a(cfg::MMAConfig, A, row, col, layout) = _load_a_fb(cfg, A, row, col, layout, _mma_wave())
-@inline _load_b(cfg::MMAConfig, B, row, col, layout) = _load_b_fb(cfg, B, row, col, layout, _mma_wave())
-@inline _load_c(cfg::MMAConfig, C, row, col, layout) = _load_c_fb(cfg, C, row, col, layout, _mma_wave())
-@inline _fill_c(cfg::MMAConfig, v)                   = _fill_c_fb(cfg, v, _mma_wave())
-@inline _mma(cfg::MMAConfig, a::Frag{MatrixA}, b::Frag{MatrixB}, c::Frag{Accumulator}) =
+# Aiguillage : on résout le jeton matériel UNE fois, puis on dispatche dessus.
+# Les extensions backend définissent des méthodes ORDINAIRES sur `::NVIDIATC` /
+# `::CDNAMFMA` ; ci-dessous, le fallback portable sur `::NoHW`.
+@inline _load_a(cfg::MMAConfig, A, row, col, layout) = _load_a(_mma_hw(), cfg, A, row, col, layout)
+@inline _load_b(cfg::MMAConfig, B, row, col, layout) = _load_b(_mma_hw(), cfg, B, row, col, layout)
+@inline _load_c(cfg::MMAConfig, C, row, col, layout) = _load_c(_mma_hw(), cfg, C, row, col, layout)
+@inline _fill_c(cfg::MMAConfig, v)                   = _fill_c(_mma_hw(), cfg, v)
+@inline _mma(cfg::MMAConfig, a, b, c)                = _mma(_mma_hw(), cfg, a, b, c)
+@inline _store_d!(cfg::MMAConfig, C, row, col, d, layout) =
+    _store_d!(_mma_hw(), cfg, C, row, col, d, layout)
+
+# Le jeton d'un backend dont la config n'a PAS de chemin hardware doit retomber
+# sur le fallback portable : sans ces méthodes, un CuArray avec une forme non
+# tabulée (16×16×8 fp16, Tropical, …) lèverait une MethodError au lieu de
+# dégrader gracieusement. Elles ne peuvent pas être ambiguës avec celles des
+# extensions : celles-ci lient M,N,K,CT,AccT littéralement.
+@inline _load_a(::MMAHW, cfg::MMAConfig, A, row, col, layout) = _load_a(NoHW(), cfg, A, row, col, layout)
+@inline _load_b(::MMAHW, cfg::MMAConfig, B, row, col, layout) = _load_b(NoHW(), cfg, B, row, col, layout)
+@inline _load_c(::MMAHW, cfg::MMAConfig, C, row, col, layout) = _load_c(NoHW(), cfg, C, row, col, layout)
+@inline _fill_c(::MMAHW, cfg::MMAConfig, v)                   = _fill_c(NoHW(), cfg, v)
+@inline _mma(::MMAHW, cfg::MMAConfig, a::Frag{MatrixA}, b::Frag{MatrixB}, c::Frag{Accumulator}) =
+    _mma(NoHW(), cfg, a, b, c)
+@inline _store_d!(::MMAHW, cfg::MMAConfig, C, row, col, d::Frag{Accumulator}, layout) =
+    _store_d!(NoHW(), cfg, C, row, col, d, layout)
+
+@inline _load_a(::NoHW, cfg::MMAConfig, A, row, col, layout) = _load_a_fb(cfg, A, row, col, layout, _mma_wave())
+@inline _load_b(::NoHW, cfg::MMAConfig, B, row, col, layout) = _load_b_fb(cfg, B, row, col, layout, _mma_wave())
+@inline _load_c(::NoHW, cfg::MMAConfig, C, row, col, layout) = _load_c_fb(cfg, C, row, col, layout, _mma_wave())
+@inline _fill_c(::NoHW, cfg::MMAConfig, v)                   = _fill_c_fb(cfg, v, _mma_wave())
+@inline _mma(::NoHW, cfg::MMAConfig, a::Frag{MatrixA}, b::Frag{MatrixB}, c::Frag{Accumulator}) =
     _mma_fb(cfg, a, b, c, _mma_wave())
-@inline _store_d!(cfg::MMAConfig, C, row, col, d::Frag{Accumulator}, layout) =
+@inline _store_d!(::NoHW, cfg::MMAConfig, C, row, col, d::Frag{Accumulator}, layout) =
     _store_d_fb!(cfg, C, row, col, d, layout, _mma_wave())
 
 # Les corps ci-dessous reçoivent l'origine de tuile DÉJÀ décodée en (row, col)

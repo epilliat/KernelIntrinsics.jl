@@ -10,8 +10,10 @@ using LLVM
 using LLVM.Interop: @asmcall
 
 
+import KernelIntrinsics
 import KernelIntrinsics: _warpsize
 import KernelIntrinsics: _laneid
+import KernelIntrinsics.MMA: _mma_hw, CDNAMFMA
 # Import parent module and types
 
 
@@ -32,6 +34,16 @@ end
 
 Base.Experimental.@overlay AMDGPU.method_table @inline function _laneid()
     return AMDGPU.Device.activelane() + 1
+end
+
+# Jeton matériel MMA — le SEUL overlay du chemin MMA (cf. src/mma.jl, section
+# « Jeton matériel »). Il renvoie un singleton : aucune donnée, donc rien à quoi
+# un `undef` puisse s'accrocher, contrairement aux fonctions qui produisaient des
+# fragments. Device-only : côté hôte `_mma_hw()` reste `NoHW()` ⇒ fallback.
+# Il vaut pour l'extension fp8 aussi (AMDGPU est l'un de ses déclencheurs, donc
+# cette extension-ci est forcément chargée) — elle n'a pas à le redéfinir.
+Base.Experimental.@overlay AMDGPU.method_table @inline function _mma_hw()
+    return CDNAMFMA()
 end
 
 include("AMDGPU/device.jl")

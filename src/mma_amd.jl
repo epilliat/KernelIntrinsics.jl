@@ -26,10 +26,19 @@ end
 const _MFMA_VALIDATED = ("gfx942",)
 
 # Émet toutes les surcharges device pour UNE ligne de table, dans `mod`.
-# Le code généré utilise `@amdgpu_overlay` (non qualifié) : il se résout dans
-# `mod` — l'extension le fournit, le garde-fou local le stub en no-op. `AMDGPU`,
-# `MMAConfig`, `MFMAFrag`, les tags et `MulAdd` doivent aussi être en portée dans
-# `mod` (les extensions les importent).
+#
+# ⚠️ CE SONT DES MÉTHODES ORDINAIRES, PAS DES OVERLAYS — ne pas remettre
+# `@amdgpu_overlay` ici. C'est le jeton `::CDNAMFMA` (cf. src/mma.jl, section
+# « Jeton matériel ») qui sépare AMD de CUDA, dont les signatures MMA sont
+# autrement identiques (`_fill_c(::MMAConfig{16,16,16,Float16,Float32,MulAdd}, v)`
+# existe des deux côtés). Un overlay sur une fonction qui PRODUIT un fragment
+# empêche l'inférence de voir à travers l'appel et fait dégénérer l'accumulateur
+# porté par la boucle-K en `phi [ undef, %preheader ]` ⇒ résultats SILENCIEUSEMENT
+# faux. Seul `_mma_hw()` (singleton, sans donnée) reste un overlay, installé par
+# l'extension AMDGPU de base.
+#
+# `AMDGPU`, `MMAConfig`, `MFMAFrag`, `CDNAMFMA`, les tags et `MulAdd` doivent être
+# en portée dans `mod` (les extensions les importent).
 function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS)
     pk = sizeof(ST) ÷ sizeof(CT)                    # éléments CT par mot ST
     nw = na ÷ pk                                    # mots ST par lane
@@ -77,12 +86,12 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
 
         @inline _operand(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, f::MFMAFrag) = $unwrap
 
-        @amdgpu_overlay @inline _fill_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
+        @inline _fill_c(::CDNAMFMA, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
             MFMAFrag{Accumulator,$nc,$AccT}(ntuple(_ -> VecElement($AccT(v)), Val($nc)))
 
-        @amdgpu_overlay @inline function _mma(cfg::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd},
-                                              a::MFMAFrag{MatrixA}, b::MFMAFrag{MatrixB},
-                                              c::MFMAFrag{Accumulator})
+        @inline function _mma(::CDNAMFMA, cfg::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd},
+                              a::MFMAFrag{MatrixA}, b::MFMAFrag{MatrixB},
+                              c::MFMAFrag{Accumulator})
             MFMAFrag{Accumulator,$nc,$AccT}(_mfma_call(cfg, _operand(cfg, a), _operand(cfg, b), c.x))
         end
     end)
@@ -103,7 +112,7 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
         rdB = word(elB, :((e - 1) * $pk))
 
         Core.eval(mod, quote
-            @amdgpu_overlay @inline function _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{$LAYT})
+            @inline function _load_a(::CDNAMFMA, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{$LAYT})
                 r0 = row - 1; c0 = col - 1; lane = Int(AMDGPU.Device.activelane())
                 m = lane % $M; g = lane ÷ $M
                 x = ntuple(Val($nw)) do e
@@ -112,7 +121,7 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
                 MFMAFrag{MatrixA,$nw,$ST}(x)
             end
 
-            @amdgpu_overlay @inline function _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{$LAYT})
+            @inline function _load_b(::CDNAMFMA, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{$LAYT})
                 r0 = row - 1; c0 = col - 1; lane = Int(AMDGPU.Device.activelane())
                 n = lane % $N; g = lane ÷ $N
                 x = ntuple(Val($nw)) do e
@@ -121,7 +130,7 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
                 MFMAFrag{MatrixB,$nw,$ST}(x)
             end
 
-            @amdgpu_overlay @inline function _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{$LAYT})
+            @inline function _load_c(::CDNAMFMA, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{$LAYT})
                 r0 = row - 1; c0 = col - 1; lane = Int(AMDGPU.Device.activelane())
                 # g est l'index de GROUPE dans la partition par colonne (n = lane % N),
                 # donc lane ÷ N — pas ÷ M. Les deux coïncident pour les formes carrées.
@@ -133,8 +142,8 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
                 MFMAFrag{Accumulator,$nc,$AccT}(x)
             end
 
-            @amdgpu_overlay @inline function _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
-                                                       d::MFMAFrag{Accumulator}, ::Type{$LAYT})
+            @inline function _store_d!(::CDNAMFMA, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
+                                       d::MFMAFrag{Accumulator}, ::Type{$LAYT})
                 r0 = row - 1; c0 = col - 1; lane = Int(AMDGPU.Device.activelane())
                 n = lane % $N; g = lane ÷ $N     # cf. _load_c : ÷ N, pas ÷ M
                 for e in 1:$nc

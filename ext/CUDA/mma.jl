@@ -14,6 +14,7 @@
 
 import KernelIntrinsics.MMA: MMAConfig, RowMajor, ColMajor, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported, mma_shapes, _ext_shapes
+import KernelIntrinsics.MMA: NVIDIATC
 using CUDA: WMMA
 
 @inline _wmma_layout(::Type{RowMajor}) = WMMA.RowMajor
@@ -40,38 +41,46 @@ const _WMMA_TYPES = (
     (Core.BFloat16, Float32, v"8.0", ((16, 16, 16),)),
 )
 
-# Les overrides device sont émis UNE FOIS PAR FORME, avec M,N,K liés
+# Les surcharges sont émises UNE FOIS PAR FORME, avec M,N,K liés
 # littéralement (comme le fait ext/AMDGPU/mma.jl). Laisser M,N,K libres faisait
-# capturer l'override par TOUTE forme du bon type : un 16×16×8 fp16 n'a pas de
-# chemin WMMA, mais l'override l'attrapait quand même et mourait sur le
+# capturer la méthode par TOUTE forme du bon type : un 16×16×8 fp16 n'a pas de
+# chemin WMMA, mais elle l'attrapait quand même et mourait sur le
 # `_tuple_error` de CUDA.jl au lieu de retomber sur le fallback portable.
 # Lier les littéraux rend la dégradation gracieuse : forme inconnue ⇒ fallback.
+#
+# ⚠️ CE SONT DES MÉTHODES ORDINAIRES, PAS DES OVERLAYS — ne pas remettre
+# `CUDA.@device_override` ici. C'est le jeton `::NVIDIATC` (voir src/mma.jl,
+# section « Jeton matériel ») qui sépare CUDA d'AMD, dont les signatures MMA sont
+# autrement identiques. Un overlay sur une fonction qui PRODUIT un fragment
+# empêche l'inférence de voir à travers l'appel et fait dégénérer l'accumulateur
+# porté par la boucle-K en `phi float [ undef, %preheader ]` ⇒ résultats
+# silencieusement faux. Seul `_mma_hw()` (singleton, sans donnée) reste un overlay.
 for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
     @eval begin
-        CUDA.@device_override @inline _load_a(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{L}) where {L} =
+        @inline _load_a(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, A, row, col, ::Type{L}) where {L} =
             WMMA.load_a(pointer(A, _lin(A, row, col)), size(A, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _load_b(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{L}) where {L} =
+        @inline _load_b(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, B, row, col, ::Type{L}) where {L} =
             WMMA.load_b(pointer(B, _lin(B, row, col)), size(B, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _load_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{L}) where {L} =
+        @inline _load_c(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col, ::Type{L}) where {L} =
             WMMA.load_c(pointer(C, _lin(C, row, col)), size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _fill_c(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
+        @inline _fill_c(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, v) =
             WMMA.fill_c($AccT(v), WMMA.Config{$M,$N,$K,$AccT})
 
         # Tags d'usage contraints (MatrixA/MatrixB/Accumulator), comme MFMA et le
         # fallback : inverser a/b devient une MethodError à la FRONTIÈRE de KI, au
         # lieu d'être rattrapé un cran plus bas dans `WMMA.mma`. Les trois chemins
         # offrent alors la même garantie d'ordre d'opérandes.
-        CUDA.@device_override @inline _mma(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd},
-                                           a::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixA},
-                                           b::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixB},
-                                           c::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.Accumulator}) =
+        @inline _mma(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd},
+                     a::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixA},
+                     b::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.MatrixB},
+                     c::WMMA.Fragment{<:Any,<:Any,<:Any,<:Any,<:Any,<:Any,WMMA.Accumulator}) =
             WMMA.mma(a, b, c, WMMA.Config{$M,$N,$K,$AccT})
 
-        CUDA.@device_override @inline _store_d!(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
-                                                d::WMMA.Fragment, ::Type{L}) where {L} =
+        @inline _store_d!(::NVIDIATC, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}, C, row, col,
+                          d::WMMA.Fragment, ::Type{L}) where {L} =
             WMMA.store_d(pointer(C, _lin(C, row, col)), d, size(C, 1), _wmma_layout(L), WMMA.Config{$M,$N,$K,$AccT})
 
         # Query hôte : gatée sur la capability RÉELLE du device (cf. le côté AMD,

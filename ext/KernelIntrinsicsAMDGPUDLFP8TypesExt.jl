@@ -17,13 +17,12 @@ using DLFP8Types: Float8_E4M3FNUZ, Float8_E5M2FNUZ
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _register_ext_shape!
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported
+import KernelIntrinsics.MMA: CDNAMFMA   # jeton matériel splicé par _emit_mfma_row
 
-# @amdgpu_overlay est un macro local à l'extension AMDGPU de base ; on en garde une
-# copie ici (3 lignes) plutôt que de risquer un partage inter-extensions fragile.
-# Le code émis par _emit_mfma_row l'appelle non qualifié : il se résout dans CE module.
-macro amdgpu_overlay(expr)
-    return esc(:(Base.Experimental.@overlay AMDGPU.method_table $expr))
-end
+# NOTE : la copie locale de `@amdgpu_overlay` a disparu — `_emit_mfma_row` émet
+# désormais des méthodes ORDINAIRES discriminées par `::CDNAMFMA` (cf. src/mma.jl).
+# L'overlay `_mma_hw()` qui installe ce jeton vit dans l'extension AMDGPU de base,
+# forcément chargée ici (AMDGPU est l'un des déclencheurs de cette extension).
 
 # CDNA3 : gfx942 (validé) et gfx950 (ISA seule, non sondé → filtré par _MFMA_VALIDATED).
 const _CDNA3_FP8 = ("gfx942", "gfx950")

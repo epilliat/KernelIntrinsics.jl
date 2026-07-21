@@ -18,6 +18,7 @@
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported, mma_shapes
 import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _ext_shapes
+import KernelIntrinsics.MMA: CDNAMFMA   # jeton matériel splicé par _emit_mfma_row
 
 # ── 1) Fallback wave64 ───────────────────────────────────────────────────────
 @amdgpu_overlay @inline _mma_wave() = Val{64}()

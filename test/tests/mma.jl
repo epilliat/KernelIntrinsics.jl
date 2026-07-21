@@ -59,6 +59,86 @@ end
 run_kloop_rc(cfg, C, A, B, Kb) =
     (mma_kloop_rc!(backend, Int(warpsz))(cfg, C, A, B, Val(Kb); ndrange = Int(warpsz)); synchronize(backend))
 
+# ── RÉGRESSION : accumulateur porté par une VRAIE boucle-K ────────────────────
+#
+# Ce kernel existe pour une seule raison : les tests ci-dessus NE PEUVENT PAS voir
+# le bug d'accumulateur `undef`. `mma_kloop!`/`mma_kloop_rc!` bornent la boucle-K
+# par `Val{Kb}` avec Kb=4 ⇒ LLVM la DÉROULE COMPLÈTEMENT, donc il n'existe aucun
+# phi porté par la boucle, donc rien qui puisse valoir `undef`. Historiquement, les
+# six points d'entrée MMA étaient installés par des OVERLAYS ; l'inférence ne
+# voyait pas à travers, le fragment revenait imprécisément typé, SROA échouait, et
+# le préheader émettait `phi float [ undef, … ]` — soit 0, soit du bruit, selon la
+# version de LLVM (cf. src/mma.jl, section « Jeton matériel »).
+#
+# Le motif doit donc réunir TOUS les axes qui manquaient :
+#   • borne de boucle DYNAMIQUE (`nkt` calculé à l'exécution) ⇒ phi réel ;
+#   • ≥ 2 warps par workgroup ;
+#   • ≥ 2 `mma` par panneau chargé (NKS) ;
+#   • opérandes mis en scène dans `@localmem` À L'INTÉRIEUR de la boucle, avec des
+#     `@synchronize` que l'accumulateur doit traverser ;
+#   • à faire tourner sous `--check-bounds=yes` (ce que fait déjà runtests).
+# C'est exactement la forme que KernelForge utilise dans son GEMM.
+@kernel unsafe_indices = true function mma_gemm_tiled!(cfg, C, A, B, M, N, K,
+                                                       ::Val{WS}, ::Val{NW}, ::Val{NKS}) where {WS,NW,NKS}
+    @uniform begin
+        BM = 16 * NW; BN = 16; BK = 16 * NKS
+        wg = NW * WS; nbx = cld(M, BM); nkt = cld(K, BK)   # nkt : borne DYNAMIQUE
+        CT = MMA.compute_type(cfg); AccT = MMA.acc_type(cfg)
+    end
+    lid = Int(@index(Local)); gid = Int(@index(Group))
+    brow = (gid - 1) % nbx; bcol = (gid - 1) ÷ nbx
+    warp = (lid - 1) ÷ WS; m0 = warp * 16
+
+    sA = @localmem CT (BM, BK)
+    sB = @localmem CT (BK, BN)
+    sD = @localmem AccT (BM, BN)
+
+    c = MMA.fill_c(cfg, MMA.acc_identity(cfg))
+    kt = 0
+    while kt < nkt
+        p = lid
+        while p <= BM * BK
+            e = p - 1; row = e % BM; kk = e ÷ BM
+            m = brow * BM + row + 1; k = kt * BK + kk + 1
+            @inbounds sA[row + 1, kk + 1] = (m <= M && k <= K) ? CT(A[m, k]) : zero(CT)
+            p += wg
+        end
+        p = lid
+        while p <= BK * BN
+            e = p - 1; kk = e % BK; col = e ÷ BK
+            k = kt * BK + kk + 1; n = bcol * BN + col + 1
+            @inbounds sB[kk + 1, col + 1] = (k <= K && n <= N) ? CT(B[k, n]) : zero(CT)
+            p += wg
+        end
+        @synchronize
+        for ks in 0:(NKS - 1)
+            a = MMA.load_a(cfg, sA, m0 + 1, ks * 16 + 1, MMA.ColMajor)
+            b = MMA.load_b(cfg, sB, ks * 16 + 1, 1, MMA.ColMajor)
+            c = MMA.mma(cfg, a, b, c)
+        end
+        @synchronize
+        kt += 1
+    end
+    MMA.store_d!(cfg, sD, m0 + 1, 1, c, MMA.ColMajor)
+    @synchronize
+    p = lid
+    while p <= BM * BN
+        e = p - 1; r = e % BM; col = e ÷ BM
+        m = brow * BM + r + 1; n = bcol * BN + col + 1
+        if m <= M && n <= N
+            @inbounds C[m, n] = sD[r + 1, col + 1]
+        end
+        p += wg
+    end
+end
+
+function run_gemm_tiled(cfg, C, A, B, M, N, K, NW, NKS)
+    WS = Int(warpsz); BM = 16 * NW; wg = NW * WS
+    mma_gemm_tiled!(backend, wg)(cfg, C, A, B, M, N, K, Val(WS), Val(NW), Val(NKS);
+                                 ndrange = wg * cld(M, BM) * cld(N, 16))
+    synchronize(backend)
+end
+
 # Tuile avec layout par opérande. `la`/`lb` sont des TYPES de tag passés en
 # argument (pas des paramètres de MMAConfig) : la config reste inchangée.
 @kernel function mma_tile_lay!(cfg, C, A, B, fillv, la, lb)
@@ -510,6 +590,57 @@ run_loadc(cfg, D, A, B, Cin) =
                 run_kloop(cfg, C, A, B, 0.0f0, Kb)
                 ref = Float32.(from_device(A)) * Float32.(from_device(B))
                 @test from_device(C) ≈ ref rtol = 1.0f-2
+            end
+        end
+
+        # ── RÉGRESSION accumulateur `undef` (cf. mma_gemm_tiled! plus haut) ────
+        # Boucle-K à borne dynamique, 1 et 2 warps, 1 et 2 mma par panneau, mise
+        # en scène `@localmem` dans la boucle. Sur la version overlay de KI, ce
+        # motif produisait `phi float [ undef, %preheader ]` sur le chemin HW :
+        # selon LLVM, soit des NaN/1e34, soit — pire — des chiffres justes qui
+        # redeviennent faux au prochain changement de build. Ne pas remplacer la
+        # borne dynamique par un `Val{}` : cela déroulerait la boucle et le test
+        # perdrait toute valeur.
+        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+            @testset "HW GEMM tuilé, boucle-K dynamique (NW=$NW, NKS=$NKS)" for
+                    (NW, NKS) in ((1, 1), (2, 1), (1, 2), (2, 2))
+                cfg = MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}()
+                for (Mg, Ng, Kg) in ((16, 16, 64), (48, 32, 96), (33, 17, 70))
+                    Ah = rand(Float16, Mg, Kg); Bh = rand(Float16, Kg, Ng)
+                    C = to_device(zeros(Float32, Mg, Ng))
+                    run_gemm_tiled(cfg, C, to_device(Ah), to_device(Bh), Mg, Ng, Kg, NW, NKS)
+                    ref = Float32.(Ah) * Float32.(Bh)
+                    got = from_device(C)
+                    @test all(isfinite, got)
+                    @test got ≈ ref rtol = 1.0f-2
+                end
+            end
+
+            # ── Le garde-fou QUI MORD : inspection de l'IR ────────────────────
+            # Le test numérique ci-dessus est nécessaire mais PAS suffisant : un
+            # `undef` peut se matérialiser en 0 et les chiffres sont alors justes
+            # PAR CHANCE (c'est exactement ce qui se passait sur CUDA.jl 5.11.3 /
+            # LLVM 20 — le motif de la boucle-K sortait `phi float [ undef, … ]`
+            # tout en donnant des résultats corrects). Le seul signal fiable est
+            # donc l'IR elle-même : sur le chemin hardware, AUCUN phi flottant ne
+            # doit être initialisé à `undef` dans le préheader de la boucle-K.
+            # Si ce test casse, chercher un overlay réintroduit sur une fonction
+            # qui produit un fragment (cf. src/mma.jl, « Jeton matériel »).
+            if TEST_BACKEND == "cuda"
+                @testset "boucle-K : accumulateur initialisé (pas d'undef dans l'IR)" begin
+                    cfg = MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}()
+                    Mg, Ng, Kg = 48, 32, 96
+                    C = to_device(zeros(Float32, Mg, Ng))
+                    A = to_device(rand(Float16, Mg, Kg)); B = to_device(rand(Float16, Kg, Ng))
+                    io = IOBuffer()
+                    CUDA.@device_code_llvm io = io debuginfo = :none begin
+                        run_gemm_tiled(cfg, C, A, B, Mg, Ng, Kg, 2, 2)
+                    end
+                    ir = String(take!(io))
+                    bad = [l for l in split(ir, '\n')
+                           if occursin("phi float", l) && occursin("undef", l)]
+                    @test isempty(bad)
+                end
             end
         end
     end

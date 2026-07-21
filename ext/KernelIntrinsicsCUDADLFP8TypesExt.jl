@@ -22,6 +22,7 @@ using LLVM.Interop: @asmcall
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported, _register_ext_shape!
+import KernelIntrinsics.MMA: NVIDIATC
 
 # Fragment mma.sync opaque : NTuple de registres, distribution thread↔élément non exposée.
 struct SyncFrag{Use,L,T}
@@ -67,20 +68,20 @@ for (F8, tag) in _MMASYNC_FP8
                      a[1], a[2], a[3], a[4], b[1], b[2], c[1], c[2], c[3], c[4])
         end
 
-        CUDA.@device_override @inline function _load_a(::MMAConfig{16,8,32,$F8,Float32,MulAdd}, A, row, col, ::Type{LAY}) where {LAY}
+        @inline function _load_a(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}, A, row, col, ::Type{LAY}) where {LAY}
             r0 = row - 1; c0 = col - 1; lane = Int(CUDA.laneid()) - 1
             g = lane >> 2; t = lane & 3
             SyncFrag{MatrixA,4,UInt32}((_packA(A, r0, c0, g, t * 4, LAY), _packA(A, r0, c0, g + 8, t * 4, LAY),
                                        _packA(A, r0, c0, g, t * 4 + 16, LAY), _packA(A, r0, c0, g + 8, t * 4 + 16, LAY)))
         end
 
-        CUDA.@device_override @inline function _load_b(::MMAConfig{16,8,32,$F8,Float32,MulAdd}, B, row, col, ::Type{LAY}) where {LAY}
+        @inline function _load_b(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}, B, row, col, ::Type{LAY}) where {LAY}
             r0 = row - 1; c0 = col - 1; lane = Int(CUDA.laneid()) - 1
             g = lane >> 2; t = lane & 3
             SyncFrag{MatrixB,2,UInt32}((_packB(B, r0, c0, t * 4, g, LAY), _packB(B, r0, c0, t * 4 + 16, g, LAY)))
         end
 
-        CUDA.@device_override @inline function _load_c(::MMAConfig{16,8,32,$F8,Float32,MulAdd}, C, row, col, ::Type{LAY}) where {LAY}
+        @inline function _load_c(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}, C, row, col, ::Type{LAY}) where {LAY}
             r0 = row - 1; c0 = col - 1; lane = Int(CUDA.laneid()) - 1
             g = lane >> 2; t = lane & 3
             i0 = _ij(LAY, r0, c0, g, t * 2);     i1 = _ij(LAY, r0, c0, g, t * 2 + 1)
@@ -89,15 +90,15 @@ for (F8, tag) in _MMASYNC_FP8
                                                        Float32(C[i2[1], i2[2]]), Float32(C[i3[1], i3[2]])))
         end
 
-        CUDA.@device_override @inline _fill_c(::MMAConfig{16,8,32,$F8,Float32,MulAdd}, v) =
+        @inline _fill_c(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}, v) =
             SyncFrag{Accumulator,4,Float32}(ntuple(_ -> Float32(v), Val(4)))
 
-        CUDA.@device_override @inline _mma(::MMAConfig{16,8,32,$F8,Float32,MulAdd},
-                                           a::SyncFrag{MatrixA}, b::SyncFrag{MatrixB}, c::SyncFrag{Accumulator}) =
+        @inline _mma(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd},
+                     a::SyncFrag{MatrixA}, b::SyncFrag{MatrixB}, c::SyncFrag{Accumulator}) =
             SyncFrag{Accumulator,4,Float32}($call(a.x, b.x, c.x))
 
-        CUDA.@device_override @inline function _store_d!(::MMAConfig{16,8,32,$F8,Float32,MulAdd}, C, row, col,
-                                                         d::SyncFrag{Accumulator}, ::Type{LAY}) where {LAY}
+        @inline function _store_d!(::NVIDIATC, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}, C, row, col,
+                                   d::SyncFrag{Accumulator}, ::Type{LAY}) where {LAY}
             r0 = row - 1; c0 = col - 1; lane = Int(CUDA.laneid()) - 1
             g = lane >> 2; t = lane & 3
             i0 = _ij(LAY, r0, c0, g, t * 2);     i1 = _ij(LAY, r0, c0, g, t * 2 + 1)
