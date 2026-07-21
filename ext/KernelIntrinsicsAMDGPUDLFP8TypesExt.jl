@@ -15,7 +15,7 @@ using AMDGPU
 using DLFP8Types: Float8_E4M3FNUZ, Float8_E5M2FNUZ
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
-import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _register_mfma_shapes!
+import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _register_ext_shape!
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported
 
 # @amdgpu_overlay est un macro local à l'extension AMDGPU de base ; on en garde une
@@ -46,7 +46,11 @@ end
 # À l'__init__ (chargement), pas à la précompilation : la mutation d'un global
 # d'un autre module ne doit pas être figée dans l'image précompilée.
 function __init__()
-    _register_mfma_shapes!(_MFMA_OPS_FP8)
+    for (M, N, K, CT, AccT, ST, INTR, na, nc, acclay, ARCHS) in _MFMA_OPS_FP8
+        _register_ext_shape!(AMDGPU.ROCBackend, (M = M, N = N, K = K, compute = CT, acc = AccT),
+                             () -> (g = first(split(AMDGPU.device().gcn_arch, ':'));
+                                    g in ARCHS && g in _MFMA_VALIDATED))
+    end
 end
 
 end # module KernelIntrinsicsAMDGPUDLFP8TypesExt

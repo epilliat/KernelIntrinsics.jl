@@ -17,7 +17,7 @@
 
 import KernelIntrinsics.MMA: MMAConfig, ColMajor, RowMajor, MatrixA, MatrixB, Accumulator, MulAdd
 import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, _mma_wave, mma_supported, mma_shapes
-import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _MFMA_SHAPE_REGISTRY
+import KernelIntrinsics.MMA: MFMAFrag, _emit_mfma_row, _MFMA_VALIDATED, _ext_shapes
 
 # ── 1) Fallback wave64 ───────────────────────────────────────────────────────
 @amdgpu_overlay @inline _mma_wave() = Val{64}()
@@ -81,9 +81,6 @@ function mma_shapes(::AMDGPU.ROCBackend)
         s = _mfma_shape_if_supported(gfx, row)
         s === nothing || push!(out, s)
     end
-    for row in _MFMA_SHAPE_REGISTRY
-        s = _mfma_shape_if_supported(gfx, row)
-        s === nothing || push!(out, s)
-    end
+    append!(out, _ext_shapes(AMDGPU.ROCBackend))   # formes des ext optionnelles (fp8)
     return Tuple(out)
 end

@@ -160,6 +160,29 @@ défaut est un « method overwriting », interdit pendant la précompilation.
 """
 mma_shapes(::Any) = ()
 
+# Registre des formes hardware apportées par les extensions OPTIONNELLES (fp8 via
+# DLFP8Types, côté AMD comme CUDA). Chaque entrée : (type de backend, forme
+# NamedTuple `(M,N,K,compute,acc)`, prédicat de support HÔTE). `mma_shapes` de
+# chaque backend y ajoute ses entrées, en plus de sa table native. Rempli à
+# l'`__init__` des extensions (jamais à la précompilation : la mutation d'un global
+# d'un autre module ne doit pas être figée dans l'image).
+#
+# On passe par ce registre plutôt que par `Base.get_extension` : depuis une
+# extension, `parentmodule(@__MODULE__)` n'est pas `KernelIntrinsics`, donc
+# get_extension renvoyait `nothing` et les formes fp8 n'étaient pas énumérées — et,
+# contrairement à get_extension, le registre est vérifiable par le garde-fou local.
+const _EXT_SHAPE_REGISTRY = Vector{Tuple{Type,NamedTuple,Any}}()
+
+function _register_ext_shape!(backend::Type, shape::NamedTuple, supported)
+    any(e -> e[1] === backend && e[2] === shape, _EXT_SHAPE_REGISTRY) && return nothing
+    push!(_EXT_SHAPE_REGISTRY, (backend, shape, supported))
+    return nothing
+end
+
+# Formes enregistrées pour ce type de backend dont le prédicat de support est vrai.
+_ext_shapes(backend::Type) =
+    NamedTuple[e[2] for e in _EXT_SHAPE_REGISTRY if e[1] === backend && e[3]()]
+
 # ============================================================================
 # Fallback portable (régime « correction »)
 # ============================================================================

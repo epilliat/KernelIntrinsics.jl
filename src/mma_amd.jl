@@ -25,25 +25,6 @@ end
 # mauvais intrinsic qui échoue bruyamment. Élargir EXIGE de repasser le prober.
 const _MFMA_VALIDATED = ("gfx942",)
 
-# Registre des lignes MFMA apportées par les extensions OPTIONNELLES (fp8/bf8 via
-# DLFP8Types). L'extension de base lit sa table `_MFMA_OPS` directement ; une
-# extension optionnelle, elle, appelle `_register_mfma_shapes!` à son `__init__`
-# pour que `mma_shapes` énumère aussi ses formes. On passe par ce registre plutôt
-# que par `Base.get_extension` (dont le module parent est piégeux depuis une
-# extension) — et il est vérifiable par le garde-fou local. Format des lignes :
-# identique à `_MFMA_OPS` (le 11-uple complet).
-const _MFMA_SHAPE_REGISTRY = Vector{Any}()
-
-# Enregistre des lignes de forme, sans doublon (idempotent sur (M,N,K,CT,AccT)).
-function _register_mfma_shapes!(rows)
-    for row in rows
-        key = row[1:5]
-        any(r -> r[1:5] === key, _MFMA_SHAPE_REGISTRY) && continue
-        push!(_MFMA_SHAPE_REGISTRY, row)
-    end
-    return nothing
-end
-
 # Émet toutes les surcharges device pour UNE ligne de table, dans `mod`.
 # Le code généré utilise `@amdgpu_overlay` (non qualifié) : il se résout dans
 # `mod` — l'extension le fournit, le garde-fou local le stub en no-op. `AMDGPU`,

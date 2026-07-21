@@ -19,6 +19,8 @@ KernelIntrinsicsAMDGPUExt = "AMDGPU"
 # fp8/bf8 hardware MFMA : ne charge que si AMDGPU ET DLFP8Types sont présents.
 KernelIntrinsicsAMDGPUDLFP8TypesExt = ["AMDGPU", "DLFP8Types"]
 KernelIntrinsicsCUDAExt = "CUDA"
+# fp8/bf8 hardware mma.sync : ne charge que si CUDA ET DLFP8Types sont présents.
+KernelIntrinsicsCUDADLFP8TypesExt = ["CUDA", "DLFP8Types"]
 KernelIntrinsicsMetalExt = "Metal"
 
 [compat]

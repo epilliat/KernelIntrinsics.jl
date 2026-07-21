@@ -29,3 +29,4 @@ TEST_BACKEND in ("cuda", "roc") && include("tests/dynlocalmem.jl")
 # MMA (tensor cores) : chemin HW WMMA validé sur CUDA ; le fallback portable est
 # exercé via le même harnais. Le path AMD (MFMA) n'est pas encore câblé.
 TEST_BACKEND == "cuda" && include("tests/mma.jl")
+TEST_BACKEND == "cuda" && include("tests/mma_fp8.jl")   # fp8 mma.sync (charge DLFP8Types)

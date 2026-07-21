@@ -13,7 +13,7 @@
 # THIRD_PARTY_LICENSES.
 
 import KernelIntrinsics.MMA: MMAConfig, RowMajor, ColMajor, MulAdd
-import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported, mma_shapes
+import KernelIntrinsics.MMA: _load_a, _load_b, _load_c, _fill_c, _mma, _store_d!, mma_supported, mma_shapes, _ext_shapes
 using CUDA: WMMA
 
 @inline _wmma_layout(::Type{RowMajor}) = WMMA.RowMajor
@@ -94,5 +94,6 @@ function mma_shapes(::CUDA.CUDABackend)
             push!(out, (M = M, N = N, K = K, compute = CT, acc = AccT))
         end
     end
+    append!(out, _ext_shapes(CUDA.CUDABackend))   # formes des ext optionnelles (fp8 mma.sync)
     return Tuple(out)
 end
