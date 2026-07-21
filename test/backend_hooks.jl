@@ -90,6 +90,37 @@ macro capture_ir(expr)
 end
 
 
+# Like @capture_ir, but always captures **LLVM IR** rather than the backend's
+# final assembly (PTX / GCN). Needed for checks that must see LLVM-level
+# constructs which the assembly has already lowered away — notably the K-loop
+# accumulator phi: `phi float [ undef, %preheader ]` exists only in LLVM IR.
+#
+# Usage:
+#   ir = @capture_llvm run_gemm_tiled(cfg, C, A, B, M, N, K, 2, 2)
+macro capture_llvm(expr)
+    # Same hygiene caveat as @capture_ir: keep `io` a literal symbol so the
+    # inner @device_code_llvm macro can find it.
+    if TEST_BACKEND == "cuda"
+        esc(:(let io = IOBuffer()
+            CUDA.@device_code_llvm io = io debuginfo = :none $expr
+            String(take!(io))
+        end))
+    elseif TEST_BACKEND == "roc"
+        esc(:(let io = IOBuffer()
+            AMDGPU.@device_code_llvm io = io debuginfo = :none $expr
+            String(take!(io))
+        end))
+    elseif TEST_BACKEND == "metal"
+        esc(:(let io = IOBuffer()
+            Metal.@device_code_llvm io = io debuginfo = :none $expr
+            String(take!(io))
+        end))
+    else
+        error("Unknown TEST_BACKEND for @capture_llvm: $TEST_BACKEND")
+    end
+end
+
+
 # Read/write a scalar element of a device array on the active backend.
 #
 # Usage:

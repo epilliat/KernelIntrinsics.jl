@@ -626,21 +626,19 @@ run_loadc(cfg, D, A, B, Cin) =
             # doit être initialisé à `undef` dans le préheader de la boucle-K.
             # Si ce test casse, chercher un overlay réintroduit sur une fonction
             # qui produit un fragment (cf. src/mma.jl, « Jeton matériel »).
-            if TEST_BACKEND == "cuda"
-                @testset "boucle-K : accumulateur initialisé (pas d'undef dans l'IR)" begin
-                    cfg = MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}()
-                    Mg, Ng, Kg = 48, 32, 96
-                    C = to_device(zeros(Float32, Mg, Ng))
-                    A = to_device(rand(Float16, Mg, Kg)); B = to_device(rand(Float16, Kg, Ng))
-                    io = IOBuffer()
-                    CUDA.@device_code_llvm io = io debuginfo = :none begin
-                        run_gemm_tiled(cfg, C, A, B, Mg, Ng, Kg, 2, 2)
-                    end
-                    ir = String(take!(io))
-                    bad = [l for l in split(ir, '\n')
-                           if occursin("phi float", l) && occursin("undef", l)]
-                    @test isempty(bad)
-                end
+            # Ce garde-fou vaut pour TOUT backend hardware, pas seulement CUDA :
+            # le chemin MFMA (AMD) était installé par le même mécanisme d'overlay
+            # et souffrait donc du même `undef`. Validé sur MI300A (gfx942) le
+            # 2026-07-21 : 12/12 numérique ET zéro phi `undef`.
+            @testset "boucle-K : accumulateur initialisé (pas d'undef dans l'IR)" begin
+                cfg = MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}()
+                Mg, Ng, Kg = 48, 32, 96
+                C = to_device(zeros(Float32, Mg, Ng))
+                A = to_device(rand(Float16, Mg, Kg)); B = to_device(rand(Float16, Kg, Ng))
+                ir = @capture_llvm run_gemm_tiled(cfg, C, A, B, Mg, Ng, Kg, 2, 2)
+                bad = [l for l in split(ir, '\n')
+                       if occursin("phi float", l) && occursin("undef", l)]
+                @test isempty(bad)
             end
         end
     end

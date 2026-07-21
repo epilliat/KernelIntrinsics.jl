@@ -28,5 +28,11 @@ TEST_BACKEND in ("cuda", "roc") && include("tests/dynlocalmem.jl")
 
 # MMA (tensor cores) : chemin HW WMMA validé sur CUDA ; le fallback portable est
 # exercé via le même harnais. Le path AMD (MFMA) n'est pas encore câblé.
-TEST_BACKEND == "cuda" && include("tests/mma.jl")
-TEST_BACKEND == "cuda" && include("tests/mma_fp8.jl")   # fp8 mma.sync (charge DLFP8Types)
+# MMA tourne sur les deux backends hardware. Restreindre à "cuda" laissait le
+# chemin MFMA (gfx942) SANS AUCUNE couverture — c'est exactement pourquoi le bug
+# d'accumulateur `undef` n'a pu être vu que côté NVIDIA, alors qu'il frappait les
+# deux (même mécanisme d'overlay). Les tests se gardent eux-mêmes par
+# `MMA.mma_supported(backend, cfg)`, donc une forme absente du hardware est
+# sautée, pas échouée.
+TEST_BACKEND in ("cuda", "roc") && include("tests/mma.jl")
+TEST_BACKEND in ("cuda", "roc") && include("tests/mma_fp8.jl")   # fp8 (charge DLFP8Types)
