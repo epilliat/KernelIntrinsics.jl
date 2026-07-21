@@ -131,14 +131,23 @@ end
 @inline mma(cfg::MMAConfig, a, b, c) = _mma(cfg, a, b, c)
 
 """
-    mma_supported(cfg::MMAConfig) -> Bool
+    mma_supported(backend, cfg::MMAConfig) -> Bool
 
-Vrai si un chemin **hardware** existe pour cette config sur le backend chargé.
-Faux ⇒ l'API reste utilisable mais passe par le fallback portable. Réponse
-grossière (par type/forme, pas par device exact) — suffisante pour choisir une
-tuile côté appelant. Les extensions backend la surchargent.
+Vrai si un chemin **hardware** existe pour cette config sur le device courant de
+`backend` (le backend KernelAbstractions). Faux ⇒ l'API reste utilisable mais
+passe par le fallback portable. Réponse grossière (par type/forme, pas par device
+exact) — suffisante pour choisir une tuile côté appelant. Requête HÔTE (elle
+interroge le device), pas utilisable dans un kernel.
+
+Prend le backend en ARGUMENT pour la MÊME raison que `mma_shapes` : les tables de
+formes de CUDA et d'AMD se recouvrent, donc les extensions déclaraient des
+signatures IDENTIQUES (`mma_supported(::MMAConfig{16,16,16,Float16,Float32,MulAdd})`
+existe des deux côtés). Ce sont des méthodes ordinaires : avec CUDA **et** AMDGPU
+chargés, la seconde extension écrasait la première et `mma_supported` répondait
+pour le mauvais vendeur. Avec le backend en 1er argument, elles SPÉCIALISENT au
+lieu de s'écraser.
 """
-mma_supported(::MMAConfig) = false
+mma_supported(::Any, ::MMAConfig) = false
 
 """
     mma_shapes(backend) -> Tuple of NamedTuple
@@ -151,7 +160,8 @@ Existe pour que l'appelant (KernelForge) n'ait pas à redupliquer la connaissanc
 des formes : il choisit sa tuile dans cette liste au lieu de coder en dur une
 table qui dériverait de celle-ci.
 
-INVARIANT : tout ce que `mma_shapes` liste doit vérifier `mma_supported(cfg)`.
+INVARIANT : tout ce que `mma_shapes(backend)` liste doit vérifier
+`mma_supported(backend, cfg)`.
 Ne jamais y ajouter une forme non testée sur hardware.
 
 Prend le backend en ARGUMENT (et non zéro argument) pour que les extensions le

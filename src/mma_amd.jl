@@ -159,7 +159,7 @@ function _emit_mfma_row(mod::Module, M, N, K, CT, AccT, ST, INTR, na, nc, acclay
     # croisée avec _MFMA_VALIDATED. Les archs et la liste validée sont splicées en
     # littéral, donc aucune dépendance de portée dans `mod`.
     Core.eval(mod, quote
-        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) = begin
+        mma_supported(::AMDGPU.ROCBackend, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) = begin
             g = first(split(AMDGPU.device().gcn_arch, ':'))
             g in $ARCHS && g in $(_MFMA_VALIDATED)
         end

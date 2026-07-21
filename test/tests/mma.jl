@@ -232,7 +232,7 @@ run_loadc(cfg, D, A, B, Cin) =
             A = to_device(rand(Float32, M, K)); B = to_device(rand(Float32, K, N))
             C = to_device(zeros(Float32, M, N))
             cfg = MMA.MMAConfig{M,N,K,Float32,Float32,MMA.MulAdd}()
-            @test MMA.mma_supported(cfg) == false          # pas de tensor core pour fp32
+            @test MMA.mma_supported(backend, cfg) == false          # pas de tensor core pour fp32
             run_tile(cfg, C, A, B, 0.0f0)
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
         end
@@ -242,7 +242,7 @@ run_loadc(cfg, D, A, B, Cin) =
             A = to_device(rand(Float64, M, K)); B = to_device(rand(Float64, K, N))
             C = to_device(zeros(Float64, M, N))
             cfg = MMA.MMAConfig{M,N,K,Float64,Float64,MMA.MulAdd}()
-            @test MMA.mma_supported(cfg) == false
+            @test MMA.mma_supported(backend, cfg) == false
             run_tile(cfg, C, A, B, 0.0)
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0e-12
         end
@@ -318,7 +318,7 @@ run_loadc(cfg, D, A, B, Cin) =
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
         end
 
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "boucle-K via (row, col) (fp16→fp32, HW)" begin
                 Kb = 4; Kfull = 16 * Kb
                 A = to_device(rand(Float16, M, Kfull)); B = to_device(rand(Float16, Kfull, N))
@@ -363,7 +363,7 @@ run_loadc(cfg, D, A, B, Cin) =
 
         # Même chose sur le chemin HARDWARE (WMMA sur CUDA, MFMA sur MI300) : c'est
         # la preuve que fallback et hardware s'accordent sur la sémantique du tag.
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "RowMajor HW (fp16→fp32)" begin
                 Ah = rand(Float16, M, K); Bh = rand(Float16, K, N)
                 Art = to_device(Matrix(transpose(Ah)))
@@ -392,7 +392,7 @@ run_loadc(cfg, D, A, B, Cin) =
         # 16×16. Ces formes n'existent qu'en WMMA (MFMA gfx942 est carré).
         for (Mh, Nh, Kh) in ((8, 32, 16), (32, 8, 16))
             cfgh = MMA.MMAConfig{Mh,Nh,Kh,Float16,Float32,MMA.MulAdd}()
-            MMA.mma_supported(cfgh) || continue
+            MMA.mma_supported(backend, cfgh) || continue
             @testset "RowMajor HW asymétrique $(Mh)×$(Nh)×$(Kh)" begin
                 Ah = rand(Float16, Mh, Kh); Bh = rand(Float16, Kh, Nh)
                 Art = to_device(Matrix(transpose(Ah)))   # A row-major ⇒ tableau Kh×Mh
@@ -418,7 +418,7 @@ run_loadc(cfg, D, A, B, Cin) =
             @test from_device(C) ≈ from_device(A) * from_device(B) rtol = 1.0f-4
         end
 
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "fragments depuis @localmem (fp16→fp32, HW)" begin
                 A = to_device(rand(Float16, M, K)); B = to_device(rand(Float16, K, N))
                 C = to_device(zeros(Float32, M, N))
@@ -438,7 +438,7 @@ run_loadc(cfg, D, A, B, Cin) =
             @test from_device(D) ≈ Ah * Bh + Ch rtol = 1.0f-4
         end
 
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "load_c fusion D=A·B+C (fp16→fp32, HW)" begin
                 Ah = rand(Float16, M, K); Bh = rand(Float16, K, N); Ch = rand(Float32, M, N)
                 D = to_device(zeros(Float32, M, N))
@@ -454,7 +454,7 @@ run_loadc(cfg, D, A, B, Cin) =
             (("fp32 (fallback)", Float32, Float32, 1.0f-4, false),
              ("fp16→fp32 (HW)", Float16, Float32, 1.0f-2, true))
 
-            hw && !MMA.mma_supported(MMA.MMAConfig{M,N,K,CTo,AccTo,MMA.MulAdd}()) && continue
+            hw && !MMA.mma_supported(backend, MMA.MMAConfig{M,N,K,CTo,AccTo,MMA.MulAdd}()) && continue
             # A est 2M×2K, B est 2K×2N : on calcule la tuile (2e bloc de lignes,
             # 2e bloc de colonnes) en prenant la 2e tranche de K.
             Ah = rand(CTo, 2M, 2K); Bh = rand(CTo, 2K, 2N)
@@ -473,7 +473,7 @@ run_loadc(cfg, D, A, B, Cin) =
         # K décalée. Vérifie que le décodage (row, col) tient quand M≠N sur le HW.
         for (Mh, Nh, Kh) in ((8, 32, 16), (32, 8, 16))
             cfgh = MMA.MMAConfig{Mh,Nh,Kh,Float16,Float32,MMA.MulAdd}()
-            MMA.mma_supported(cfgh) || continue
+            MMA.mma_supported(backend, cfgh) || continue
             @testset "offsets HW asymétrique $(Mh)×$(Nh)×$(Kh)" begin
                 Ah = rand(Float16, 2Mh, 2Kh); Bh = rand(Float16, 2Kh, 2Nh)
                 C = to_device(zeros(Float32, 2Mh, 2Nh))
@@ -517,7 +517,7 @@ run_loadc(cfg, D, A, B, Cin) =
         #    `_tuple_error` au lieu de dégrader.
         @testset "fallback fp16 16×16×8 (forme hors table)" begin
             cfg8 = MMA.MMAConfig{16,16,8,Float16,Float32,MMA.MulAdd}()
-            @test MMA.mma_supported(cfg8) == false
+            @test MMA.mma_supported(backend, cfg8) == false
             A = to_device(rand(Float16, 16, 8)); B = to_device(rand(Float16, 8, 16))
             C = to_device(zeros(Float32, 16, 16))
             run_tile(cfg8, C, A, B, 0.0f0)
@@ -536,7 +536,7 @@ run_loadc(cfg, D, A, B, Cin) =
             for s in shapes
                 cfg = MMA.MMAConfig{s.M,s.N,s.K,s.compute,s.acc,MMA.MulAdd}()
                 # 1) cohérence avec la query ponctuelle
-                @test MMA.mma_supported(cfg)
+                @test MMA.mma_supported(backend, cfg)
                 # 2) et ça calcule juste
                 if s.compute === Int8
                     Ah = rand(Int8(-100):Int8(100), s.M, s.K)
@@ -569,7 +569,7 @@ run_loadc(cfg, D, A, B, Cin) =
             (Mh, Nh, Kh) in ((16, 16, 16), (8, 32, 16), (32, 8, 16), (32, 32, 8))
 
             cfgh = MMA.MMAConfig{Mh,Nh,Kh,CT,AccT,MMA.MulAdd}()
-            MMA.mma_supported(cfgh) || continue
+            MMA.mma_supported(backend, cfgh) || continue
             @testset "HW GEMM $(Mh)×$(Nh)×$(Kh) ($CT→$AccT)" begin
                 A = to_device(_as.(CT, rand(Float32, Mh, Kh)))
                 B = to_device(_as.(CT, rand(Float32, Kh, Nh)))
@@ -581,7 +581,7 @@ run_loadc(cfg, D, A, B, Cin) =
             end
         end
 
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "HW GEMM tuilé K=64 (fp16→fp32)" begin
                 Kb = 4; Kfull = 16 * Kb
                 A = to_device(rand(Float16, M, Kfull)); B = to_device(rand(Float16, Kfull, N))
@@ -601,7 +601,7 @@ run_loadc(cfg, D, A, B, Cin) =
         # redeviennent faux au prochain changement de build. Ne pas remplacer la
         # borne dynamique par un `Val{}` : cela déroulerait la boucle et le test
         # perdrait toute valeur.
-        if MMA.mma_supported(MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
+        if MMA.mma_supported(backend, MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}())
             @testset "HW GEMM tuilé, boucle-K dynamique (NW=$NW, NKS=$NKS)" for
                     (NW, NKS) in ((1, 1), (2, 1), (1, 2), (2, 2))
                 cfg = MMA.MMAConfig{16,16,16,Float16,Float32,MMA.MulAdd}()

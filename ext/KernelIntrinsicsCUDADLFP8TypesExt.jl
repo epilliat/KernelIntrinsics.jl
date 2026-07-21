@@ -110,7 +110,7 @@ for (F8, tag) in _MMASYNC_FP8
             nothing
         end
 
-        mma_supported(::MMAConfig{16,8,32,$F8,Float32,MulAdd}) = _fp8_supported()
+        mma_supported(::CUDA.CUDABackend, ::MMAConfig{16,8,32,$F8,Float32,MulAdd}) = _fp8_supported()
     end
 end
 

@@ -15,7 +15,7 @@ let fp8 = [s for s in MMA.mma_shapes(backend) if sizeof(s.compute) == 1 && s.com
     @testset "MMA fp8/bf8 layout exact ($(length(fp8)) formes)" begin
         @testset "$(s.compute) $(s.M)×$(s.N)×$(s.K)" for s in fp8
             cfg = MMA.MMAConfig{s.M,s.N,s.K,s.compute,s.acc,MMA.MulAdd}()
-            @test MMA.mma_supported(cfg)
+            @test MMA.mma_supported(backend, cfg)
             T = s.compute
             Ah = T.(Float32.(rand(0:4, s.M, s.K)))
             Bh = T.(Float32.(rand(0:4, s.K, s.N)))

@@ -86,7 +86,7 @@ for (CT, AccT, MINCAP, SHAPES) in _WMMA_TYPES, (M, N, K) in SHAPES
         # Query hôte : gatée sur la capability RÉELLE du device (cf. le côté AMD,
         # gaté sur _gfx()). Une forme tabulée ne suffit pas — encore faut-il que
         # la carte ait les tensor cores correspondants.
-        mma_supported(::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) =
+        mma_supported(::CUDA.CUDABackend, ::MMAConfig{$M,$N,$K,$CT,$AccT,MulAdd}) =
             CUDA.capability(CUDA.device()) >= $MINCAP
     end
 end
