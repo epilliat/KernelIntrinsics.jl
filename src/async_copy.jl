@@ -88,8 +88,11 @@ end
     ) where {NW}
     gp = reinterpret(Core.LLVMPtr{UInt32,_AS_GLOBAL}, src)
     lp = reinterpret(Core.LLVMPtr{UInt32,_AS_SHARED}, dst)
-    ntuple(Val(NW)) do w
-        unsafe_store!(lp + 4 * (w - 1), unsafe_load(gp + 4 * (w - 1)))
+    # A plain loop, NOT `ntuple(...) do`: the do-block closure crashed the
+    # LLVM-AMDGPU backend at codegen (libLLVM segfault) even with the pointers as
+    # arguments. `NW` is a compile-time literal so this unrolls just the same.
+    for w in 0:(NW - 1)
+        unsafe_store!(lp + 4 * w, unsafe_load(gp + 4 * w))
     end
     return nothing
 end
@@ -99,8 +102,8 @@ end
     ) where {NB}
     gp = reinterpret(Core.LLVMPtr{UInt8,_AS_GLOBAL}, src)
     lp = reinterpret(Core.LLVMPtr{UInt8,_AS_SHARED}, dst)
-    ntuple(Val(NB)) do w
-        unsafe_store!(lp + (w - 1), unsafe_load(gp + (w - 1)))
+    for w in 0:(NB - 1)
+        unsafe_store!(lp + w, unsafe_load(gp + w))
     end
     return nothing
 end

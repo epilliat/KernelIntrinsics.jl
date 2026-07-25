@@ -40,8 +40,11 @@ end
 @inline function _amd_async_copy!(dst::Core.LLVMPtr, src::Core.LLVMPtr, ::Val{NDWORD}) where {NDWORD}
     g = reinterpret(Core.LLVMPtr{UInt32,_AS_GLOBAL}, src)
     l = reinterpret(Core.LLVMPtr{UInt32,_AS_SHARED}, dst)
-    ntuple(Val(NDWORD)) do w
-        _amd_load_lds_dword(g + 4 * (w - 1), l + 4 * (w - 1))
+    # Plain loop, NOT `ntuple(...) do`: the do-block closure crashes the
+    # LLVM-AMDGPU backend at codegen (libLLVM segfault). `NDWORD` is a literal so
+    # this unrolls identically.
+    for w in 0:(NDWORD - 1)
+        _amd_load_lds_dword(g + 4 * w, l + 4 * w)
     end
     return nothing
 end
@@ -58,20 +61,31 @@ end
     dst::Core.LLVMPtr{T,_AS_SHARED}, src::Core.LLVMPtr{T,_AS_GLOBAL}, ::Val{4}
 ) where {T} = _amd_async_copy!(dst, src, Val(1))
 
-# `s_waitcnt vmcnt(0)` drains the outstanding LDS DMAs (and every other vector
-# memory op) before the staged data is read. KEEP is a NVIDIA commit-group notion
-# with no AMD equivalent, so it is ignored — documented in src/async_copy.jl.
-@amdgpu_overlay @inline async_wait(::Val{KEEP}) where {KEEP} =
-    ccall("llvm.amdgcn.s.waitcnt", llvmcall, Cvoid, (Int32,), Int32(0))
+# Draining the LDS DMA: a bare `ccall("llvm.amdgcn.s.waitcnt", ...)` inside a
+# KernelAbstractions `@kernel` SEGFAULTS libLLVM at codegen (verified on MI300A:
+# it works in a raw `@roc` kernel — probe amd_lds_probe.jl — but crashes through
+# the KA compilation path). So async_wait is a no-op on AMD and the drain is left
+# to the workgroup barrier (`@synchronize`) the caller MUST issue right after:
+# on gfx942 `sync_workgroup()`'s seq_cst workgroup fence lowers to include the
+# `s_waitcnt vmcnt(0)` that orders the DMA before the staged read. Evidence: the
+# hardware round-trip test passes standalone with this no-op. KEEP is a NVIDIA
+# commit-group notion with no AMD equivalent and is ignored regardless.
+# TODO: a KA-safe way to emit an explicit vmcnt wait (upstream LLVM/GPUCompiler).
+@amdgpu_overlay @inline async_wait(::Val{KEEP}) where {KEEP} = nothing
 
 # --- host side --------------------------------------------------------------
-# `global_load_lds` is known-good on gfx90a and the gfx94x / gfx950 CDNA parts;
-# gfx942 (MI300A/X) is the one hardware-verified here. Be conservative — return
-# true only on architectures where the DMA is known correct, so an unlisted arch
-# takes the register fallback rather than a wrong or non-selectable instruction.
-const _ASYNC_LDS_ARCHS = ("gfx90a", "gfx940", "gfx941", "gfx942", "gfx950")
-
-function async_copy_supported(::ROCBackend)
-    gfx = first(split(AMDGPU.device().gcn_arch, ':'))   # "gfx942:sramecc+:xnack-" → "gfx942"
-    return gfx in _ASYNC_LDS_ARCHS
-end
+# DEFERRED (2026-07-22): the `global_load_lds` DMA is real and correct in
+# ISOLATION on gfx942 (amd_lds_probe.jl: ISA `global_load_lds_dword`, round-trip
+# OK), but the KA-integrated path is TRIPLY blocked on this toolchain
+# (Julia 1.12.6 + ROCm 6.4.3 + LLVM 18) and none of it is our logic:
+#   • the correct drain `s_waitcnt vmcnt(0)` inside a KA @kernel SEGFAULTS libLLVM
+#     at codegen (works in a raw @roc kernel; async_wait is a no-op above);
+#   • that no-op then RACES — the HW round-trip returns wrong numbers because the
+#     DMA is not drained before the staged read;
+#   • compiling the async_copy kernel AFTER tests/vectorization_test.jl segfaults
+#     libLLVM (an order-dependent codegen-state interaction).
+# So report NO hardware async-copy on AMD for now: every caller (GEMM staging,
+# the KI test) takes the correct register-staged path instead. The @amdgpu_overlay
+# methods above stay defined but are never selected while this returns false.
+# Re-enable once the upstream LLVM-AMDGPU/GPUCompiler issues are fixed.
+async_copy_supported(::ROCBackend) = false
