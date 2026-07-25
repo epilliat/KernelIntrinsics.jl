@@ -34,5 +34,10 @@ TEST_BACKEND in ("cuda", "roc") && include("tests/dynlocalmem.jl")
 # deux (même mécanisme d'overlay). Les tests se gardent eux-mêmes par
 # `MMA.mma_supported(backend, cfg)`, donc une forme absente du hardware est
 # sautée, pas échouée.
+# Async global→shared/LDS copy (cp.async on NVIDIA, global_load_lds on AMD) with
+# a register fallback. HW path where async_copy_supported is true, fallback path
+# unconditionally — self-gating, so green on any backend.
+TEST_BACKEND in ("cuda", "roc") && include("tests/async_copy.jl")
+
 TEST_BACKEND in ("cuda", "roc") && include("tests/mma.jl")
 TEST_BACKEND in ("cuda", "roc") && include("tests/mma_fp8.jl")   # fp8 (charge DLFP8Types)

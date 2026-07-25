@@ -12,6 +12,7 @@ export shfl_at
 export MatchAny
 export @sleep
 export @dynlocalmem, launch!, max_dynamic_localmem
+export async_copy!, async_commit, async_wait, async_copy_supported
 #export atomic_store, atomic_load, fence
 #export Workgroup, Device, System
 #export Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relaxed
@@ -33,6 +34,7 @@ include("vectorization.jl")
 include("warp.jl")
 include("sleep.jl")
 include("dynlocalmem.jl")
+include("async_copy.jl")
 include("mma.jl")
 
 
