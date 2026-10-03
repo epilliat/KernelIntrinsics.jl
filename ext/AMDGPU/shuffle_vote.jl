@@ -22,13 +22,13 @@ for T in (Int32, UInt32, Float32)
         if direction != Idx
             @eval begin
                 Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{$direction}, mask, val::$T, src) =
-                    AMDGPU.Device.$roc_fname(val, src)
+                    AMDGPU.Device.$roc_fname(val, src % Int32)
             end
         end
     end
     @eval begin
         Base.Experimental.@overlay AMDGPU.method_table @inline _shfl(::Type{Idx}, mask, val::$T, src) =
-            AMDGPU.Device.shfl(val, src - Int32(1))
+            AMDGPU.Device.shfl(val, (src - 1) % Int32)
     end
 end
 

@@ -5,7 +5,8 @@ module KernelIntrinsicsAMDGPUExt
 using AMDGPU
 using AMDGPU: LLVMPtr, AS
 using LLVM
-using LLVM.Interop: @asmcall
+using LLVM.Interop: @asmcall, @llvmgenerated
+using LLVM.Build: fence!, load!, store!, bitcast!
 
 
 import KernelIntrinsics: _warpsize

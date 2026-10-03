@@ -1,7 +1,8 @@
 module KernelIntrinsicsCUDAExt
 
 using CUDA
-using CUDA: LLVMPtr, AS
+using CUDA: AS
+using Core: LLVMPtr
 using LLVM
 using LLVM.Interop: @asmcall, @typed_ccall
 
@@ -14,7 +15,7 @@ CUDA.@device_override @inline function _warpsize() # used inside kernels
     return 32
 end
 
-Base.Experimental.@overlay CUDA.method_table @inline function _laneid()
+CUDA.@device_override @inline function _laneid()
     return CUDA.laneid()
 end
 

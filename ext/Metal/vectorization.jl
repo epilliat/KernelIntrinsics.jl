@@ -90,6 +90,7 @@ Base.Experimental.@overlay Metal.method_table @inline @generated function _vstor
             ptr = reinterpret(Core.LLVMPtr{SIMD.Vec{$Nitem, $T}, 1}, offset_ptr)
             vec = SIMD.Vec{$Nitem, $T}(values)
             unsafe_store!(ptr, vec, 1, Val($sz))
+            return nothing
         end
     else
         @assert isbitstype(T)
@@ -104,6 +105,7 @@ Base.Experimental.@overlay Metal.method_table @inline @generated function _vstor
             raw_ptr = Base.unsafe_convert(Ptr{SIMD.Vec{$n_chunks, $ChunkT}}, pointer_from_objref(Ref(values)))
             raw = unsafe_load(raw_ptr)
             unsafe_store!(ptr, raw, 1, Val($sz))
+            return nothing
         end
     end
 end

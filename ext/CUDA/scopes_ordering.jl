@@ -4,6 +4,10 @@ import KernelIntrinsics: Acquire, Release, AcqRel, SeqCst, Weak, Volatile, Relax
 
 import KernelIntrinsics: fence, atomic_load, atomic_store!
 
+# The docstrings below are attached after the definitions, because CUDA.jl 6's
+# `@device_override` can't be documented directly: it interpolates the method table
+# object into its expansion, which the docsystem can't handle.
+
 """
 Mapping from KernelIntrinsics fence scopes to PTX scope identifiers.
 """
@@ -33,14 +37,14 @@ for ScopeType in [Workgroup, Device, System]
         ptx_instr = "fence.$order_str.$scope_str;"
 
         @eval begin
-            """
-                fence(::Type{$($ScopeType)}, ::Type{$($OrderType)})
-
-            CUDA implementation: Emits PTX instruction `$($ptx_instr)`.
-            """
             CUDA.@device_override @inline function fence(::Type{$ScopeType}, ::Type{$OrderType})
                 LLVM.Interop.@asmcall($ptx_instr, "", true, Nothing, Tuple{})
             end
+            @doc """
+                fence(::Type{$($ScopeType)}, ::Type{$($OrderType)})
+
+            CUDA implementation: Emits PTX instruction `$($ptx_instr)`.
+            """ fence(::Type{$ScopeType}, ::Type{$OrderType})
         end
     end
 end
@@ -102,12 +106,6 @@ for ScopeType in [Workgroup, Device, System]
             constraint_str = "=$constraint,l,~{memory}"
 
             @eval begin
-                """
-                    atomic_load(data::CuDeviceArray{$($T),N,AS.Global}, index::Integer, ::Type{$($ScopeType)}, ::Type{$($OrderType)}) where N
-
-                CUDA implementation: Emits PTX `$($ptx_str)`
-                Loads element at `index` from `data` with specified memory ordering.
-                """
                 CUDA.@device_override @inline function atomic_load(
                     data::CuDeviceArray{$T,N,AS.Global},
                     index::Integer,
@@ -124,6 +122,13 @@ for ScopeType in [Workgroup, Device, System]
                         ptr
                     )
                 end
+                @doc """
+                    atomic_load(data::CuDeviceArray{$($T),N,AS.Global}, index::Integer, ::Type{$($ScopeType)}, ::Type{$($OrderType)}) where N
+
+                CUDA implementation: Emits PTX `$($ptx_str)`
+                Loads element at `index` from `data` with specified memory ordering.
+                """ atomic_load(::CuDeviceArray{$T,N,AS.Global}, ::Integer, ::Type{$ScopeType},
+                                ::Type{$OrderType}) where {N}
             end
         end
     end
@@ -163,12 +168,6 @@ for ScopeType in [Workgroup, Device, System]
             constraint_str = "l,$constraint,~{memory}"
 
             @eval begin
-                """
-                    atomic_store!(data::CuDeviceArray{$($T),N,AS.Global}, index::Integer, val::$($T), ::Type{$($ScopeType)}, ::Type{$($OrderType)}) where N
-
-                CUDA implementation: Emits PTX `$($ptx_str)`
-                Stores `val` to element at `index` in `data` with specified memory ordering.
-                """
                 CUDA.@device_override @inline function atomic_store!(
                     data::CuDeviceArray{$T,N,AS.Global},
                     index::Integer,
@@ -187,6 +186,13 @@ for ScopeType in [Workgroup, Device, System]
                         val
                     )
                 end
+                @doc """
+                    atomic_store!(data::CuDeviceArray{$($T),N,AS.Global}, index::Integer, val::$($T), ::Type{$($ScopeType)}, ::Type{$($OrderType)}) where N
+
+                CUDA implementation: Emits PTX `$($ptx_str)`
+                Stores `val` to element at `index` in `data` with specified memory ordering.
+                """ atomic_store!(::CuDeviceArray{$T,N,AS.Global}, ::Integer, ::$T, ::Type{$ScopeType},
+                                  ::Type{$OrderType}) where {N}
             end
         end
     end
